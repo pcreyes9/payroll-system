@@ -12,6 +12,7 @@ class Allowance extends Model
         'name',
         'description',
         'calculation_type',
+        'frequency',
         'default_amount',
         'is_taxable',
         'is_active',

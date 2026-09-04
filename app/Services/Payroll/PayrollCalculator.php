@@ -118,6 +118,12 @@ class PayrollCalculator
                     continue;
                 }
 
+                $amount = $this->calculateAllowanceAmount(
+                    $amount,
+                    $employeeAllowance->allowance?->frequency,
+                    $employee->pay_frequency
+                );
+
                 $allowancesTotal += $amount;
 
                 $payroll->items()->create([
@@ -607,5 +613,46 @@ class PayrollCalculator
 
             default => $monthlySalary / 26,
         };
+    }
+
+    /**
+     * Calculate the allowance amount for the current payroll period.
+     *
+     * Allowance amounts are stored per their own defined frequency
+     * (e.g. "monthly" or "semi_monthly" on the allowance record).
+     *
+     * If the allowance is defined as "monthly" but the employee is
+     * paid semi-monthly, the stored amount is split evenly across
+     * both payroll runs. Otherwise the amount is used as-is.
+     */
+    private function calculateAllowanceAmount(
+        float $amount,
+        ?string $allowanceFrequency,
+        string $employeePayFrequency
+    ): float {
+        $allowanceFrequency = strtolower(
+            str_replace(
+                ['-', ' '],
+                '_',
+                $allowanceFrequency ?? 'monthly'
+            )
+        );
+
+        $employeePayFrequency = strtolower(
+            str_replace(
+                ['-', ' '],
+                '_',
+                $employeePayFrequency
+            )
+        );
+
+        if (
+            $allowanceFrequency === 'monthly'
+            && $employeePayFrequency === 'semi_monthly'
+        ) {
+            return $amount / 2;
+        }
+
+        return $amount;
     }
 }

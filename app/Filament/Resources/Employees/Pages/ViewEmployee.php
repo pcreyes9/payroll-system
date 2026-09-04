@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Employees\Pages;
 
 use App\Filament\Resources\Employees\EmployeeResource;
 use App\Filament\Schemas\EmployeeInfolist;
+use Filament\Actions\EditAction;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Schemas\Schema;
 
@@ -14,5 +15,12 @@ class ViewEmployee extends ViewRecord
     public function infolist(Schema $schema): Schema
     {
         return EmployeeInfolist::configure($schema);
+    }
+
+    protected function getHeaderActions(): array
+    {
+        return [
+            EditAction::make(),
+        ];
     }
 }

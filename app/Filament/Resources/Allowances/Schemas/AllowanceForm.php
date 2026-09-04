@@ -48,6 +48,16 @@ class AllowanceForm
                             ->default('fixed')
                             ->live(),
 
+                        Select::make('frequency')
+                            ->label('Frequency')
+                            ->options([
+                                'semi_monthly' => 'Semi-monthly',
+                                'monthly' => 'Monthly',
+                            ])
+                            ->required()
+                            ->default('monthly')
+                            ->helperText('Monthly allowances are split across both semi-monthly payroll runs.'),
+
                         TextInput::make('default_amount')
                             ->label('Default Amount')
                             ->numeric()

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Allowances\Tables;
 
+use App\Filament\Resources\Allowances\AllowanceResource;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
@@ -56,6 +57,9 @@ class AllowancesTable
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
+            ->recordUrl(
+                fn ($record) => AllowanceResource::getUrl('edit', ['record' => $record]),
+            )
             ->recordActions([
                 ViewAction::make(),
                 EditAction::make(),
