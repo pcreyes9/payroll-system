@@ -24,7 +24,7 @@ class PayrollResource extends Resource
     protected static ?string $navigationLabel = 'Payrolls';
     protected static ?int $navigationSort = 1;
     protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-document-currency-dollar';
-    protected static ?string $recordTitleAttribute = 'employee_id';
+    // protected static ?string $recordTitleAttribute = 'employee_id';
 
     public static function form(Schema $schema): Schema
     {

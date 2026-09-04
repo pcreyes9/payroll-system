@@ -22,7 +22,7 @@ class Employee extends Model
 
                 $employee->employee_id = 'EMP-' . str_pad(
                     $nextNumber,
-                    6,
+                    4,
                     '0',
                     STR_PAD_LEFT
                 );

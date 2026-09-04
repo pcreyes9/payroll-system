@@ -24,6 +24,9 @@ class DatabaseSeeder extends Seeder
 
         $this->call([
             SettingsSeeder::class,
+            AttendanceRecordSeeder::class,
+            PayrollSettingsSeeder::class,
+
         ]);
     }
 }

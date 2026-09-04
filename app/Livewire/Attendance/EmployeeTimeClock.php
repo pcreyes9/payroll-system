@@ -21,8 +21,6 @@ class EmployeeTimeClock extends Component
 
     /**
      * Application timezone.
-     *
-     * Later this can come from the attendance/settings table.
      */
     private function timezone(): string
     {
@@ -67,7 +65,7 @@ class EmployeeTimeClock extends Component
     }
 
     /**
-     * Time in.
+     * Time In.
      */
     public function timeIn(): void
     {
@@ -95,6 +93,9 @@ class EmployeeTimeClock extends Component
         $now = $this->now();
         $today = $now->toDateString();
 
+        /*
+         * Create today's attendance record if it does not exist.
+         */
         $attendance = AttendanceRecord::firstOrCreate(
             [
                 'employee_id' => $employee->id,
@@ -106,7 +107,7 @@ class EmployeeTimeClock extends Component
         );
 
         /*
-         * Prevent duplicate time in.
+         * Prevent duplicate Time In.
          */
         if ($attendance->time_in) {
             $this->todayAttendance = $attendance->fresh();
@@ -118,7 +119,10 @@ class EmployeeTimeClock extends Component
         }
 
         /*
-         * A new time-in means the employee is currently working.
+         * Save Time In.
+         *
+         * Time-based attendance calculations are performed
+         * when Time Out is recorded.
          */
         $attendance->update([
             'time_in' => $now->format('H:i:s'),
@@ -135,7 +139,10 @@ class EmployeeTimeClock extends Component
     }
 
     /**
-     * Time out.
+     * Time Out.
+     *
+     * Saves the Time Out and immediately runs the
+     * AttendanceCalculator to calculate all attendance metrics.
      */
     public function timeOut(): void
     {
@@ -163,13 +170,16 @@ class EmployeeTimeClock extends Component
         $now = $this->now();
         $today = $now->toDateString();
 
+        /*
+         * Find today's attendance record.
+         */
         $attendance = AttendanceRecord::query()
             ->where('employee_id', $employee->id)
             ->where('attendance_date', $today)
             ->first();
 
         /*
-         * Employee must have a time-in first.
+         * Employee must have a Time In first.
          */
         if (! $attendance || ! $attendance->time_in) {
             $this->todayAttendance = $attendance?->fresh();
@@ -181,7 +191,7 @@ class EmployeeTimeClock extends Component
         }
 
         /*
-         * Prevent duplicate time out.
+         * Prevent duplicate Time Out.
          */
         if ($attendance->time_out) {
             $this->todayAttendance = $attendance->fresh();
@@ -193,13 +203,21 @@ class EmployeeTimeClock extends Component
         }
 
         /*
-         * Save time-out and calculate:
+         * Save Time Out and immediately calculate:
          *
-         * - worked minutes
-         * - late minutes
-         * - undertime minutes
-         * - overtime minutes
-         * - attendance status
+         * - Worked Minutes
+         * - Regular Minutes
+         * - Rest-Day Minutes
+         * - Rest-Day Overtime
+         * - Late Minutes
+         * - Undertime Minutes
+         * - Detected Overtime
+         * - Approved Overtime
+         * - Night Shift Differential
+         * - Attendance Status
+         *
+         * Overtime remains pending until approved
+         * from the Attendance Records page.
          */
         DB::transaction(function () use ($attendance, $now) {
 
@@ -207,10 +225,18 @@ class EmployeeTimeClock extends Component
                 'time_out' => $now->format('H:i:s'),
             ]);
 
+            /*
+             * Run the attendance calculator immediately
+             * after Time Out has been saved.
+             */
             app(AttendanceCalculator::class)
                 ->calculate($attendance->fresh());
         });
 
+        /*
+         * Reload the calculated attendance record so
+         * the Time Clock displays the latest values.
+         */
         $this->todayAttendance = $attendance->fresh();
 
         $this->successMessage =
@@ -248,7 +274,8 @@ class EmployeeTimeClock extends Component
     }
 
     /**
-     * Summary: employees with an attendance record today.
+     * Summary:
+     * Employees with an attendance record today.
      */
     public function getPresentCountProperty(): int
     {
@@ -261,7 +288,8 @@ class EmployeeTimeClock extends Component
     }
 
     /**
-     * Summary: employees currently timed in.
+     * Summary:
+     * Employees currently timed in.
      */
     public function getTimedInCountProperty(): int
     {
@@ -276,10 +304,16 @@ class EmployeeTimeClock extends Component
             })
             ->count();
     }
+
+    /**
+     * Summary:
+     * Employees who have completed their attendance today.
+     */
     public function getCompletedCountProperty(): int
     {
         return $this->todayAttendances
             ->filter(function ($employee) {
+
                 $attendance = $employee->attendanceRecords->first();
 
                 return $attendance
@@ -290,7 +324,7 @@ class EmployeeTimeClock extends Component
     }
 
     /**
-     * Render the time clock.
+     * Render the Time Clock.
      */
     public function render()
     {

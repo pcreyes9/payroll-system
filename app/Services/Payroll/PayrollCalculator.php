@@ -2,7 +2,9 @@
 
 namespace App\Services\Payroll;
 
+use App\Models\AttendanceRecord;
 use App\Models\Payroll;
+use App\Models\Setting;
 use Illuminate\Support\Facades\DB;
 
 class PayrollCalculator
@@ -34,15 +36,13 @@ class PayrollCalculator
              * -------------------------------------------------
              * CLEAR PREVIOUS PAYROLL ITEMS
              * -------------------------------------------------
-             *
-             * This prevents duplicate items when recalculating.
              */
 
             $payroll->items()->delete();
 
             /*
              * -------------------------------------------------
-             * BASIC PAY
+             * BASIC SALARY
              * -------------------------------------------------
              */
 
@@ -120,10 +120,6 @@ class PayrollCalculator
 
                 $allowancesTotal += $amount;
 
-                /*
-                 * Create allowance payroll item
-                 */
-
                 $payroll->items()->create([
                     'item_type' => 'earning',
                     'code' => 'ALLOWANCE',
@@ -146,12 +142,295 @@ class PayrollCalculator
 
             /*
              * -------------------------------------------------
-             * OVERTIME / OTHER EARNINGS
+             * ATTENDANCE
              * -------------------------------------------------
              */
 
+            $attendanceRecords = AttendanceRecord::query()
+                ->where('employee_id', $employee->id)
+                ->whereBetween('attendance_date', [
+                    $period->period_start,
+                    $period->period_end,
+                ])
+                ->orderBy('attendance_date')
+                ->get();
+
+            /*
+             * -------------------------------------------------
+             * PAYROLL RATES
+             * -------------------------------------------------
+             *
+             * Rates are stored in the database as percentages.
+             *
+             * Example:
+             *
+             * 125 = 125%
+             * 130 = 130%
+             * 169 = 169%
+             * 10  = 10%
+             *
+             * They are converted to decimal multipliers below.
+             */
+
+            $regularDayRate = $this->getPayrollRate(
+                'regular_day_rate',
+                100
+            );
+
+            $regularDayOvertimeRate = $this->getPayrollRate(
+                'regular_day_overtime_rate',
+                125
+            );
+
+            $restDayRate = $this->getPayrollRate(
+                'rest_day_rate',
+                130
+            );
+
+            $restDayOvertimeRate = $this->getPayrollRate(
+                'rest_day_overtime_rate',
+                169
+            );
+
+            $nightShiftDifferentialRate = $this->getPayrollRate(
+                'night_shift_differential_rate',
+                10
+            );
+
+            /*
+             * -------------------------------------------------
+             * HOURLY RATE
+             * -------------------------------------------------
+             *
+             * 8 hours = 1 regular working day.
+             *
+             * Daily rate is derived from the monthly salary.
+             */
+
+            $dailyRate = $this->calculateDailyRate(
+                $basicSalary,
+                $employee->pay_frequency
+            );
+
+            $hourlyRate = $dailyRate / 8;
+
+            /*
+             * -------------------------------------------------
+             * ATTENDANCE PAY
+             * -------------------------------------------------
+             */
+
+            $regularDayPay = 0;
+            $restDayPay = 0;
             $overtimePay = 0;
+            $nightShiftPay = 0;
+
+            foreach ($attendanceRecords as $attendance) {
+
+                /*
+                 * -------------------------------------------------
+                 * REST DAY
+                 * -------------------------------------------------
+                 */
+
+                if ($attendance->status === 'rest_day') {
+
+                    /*
+                     * Regular rest-day hours
+                     *
+                     * Example:
+                     *
+                     * 8 hours × hourly rate × 130%
+                     */
+
+                    $restDayMinutes = (int) $attendance->rest_day_minutes;
+
+                    if ($restDayMinutes > 0) {
+
+                        $restDayHours = $restDayMinutes / 60;
+
+                        $amount = $restDayHours
+                            * $hourlyRate
+                            * $restDayRate;
+
+                        $restDayPay += $amount;
+                    }
+
+                    /*
+                     * Approved rest-day overtime
+                     */
+
+                    $approvedOtMinutes = (int) $attendance->approved_overtime_minutes;
+
+                    if (
+                        $attendance->overtime_status === 'approved'
+                        && $approvedOtMinutes > 0
+                    ) {
+                        $otHours = $approvedOtMinutes / 60;
+
+                        $amount = $otHours
+                            * $hourlyRate
+                            * $restDayOvertimeRate;
+
+                        $overtimePay += $amount;
+                    }
+
+                    /*
+                     * NSD on rest day
+                     */
+
+                    $nightMinutes = (int) $attendance->night_shift_minutes;
+
+                    if ($nightMinutes > 0) {
+
+                        $nightHours = $nightMinutes / 60;
+
+                        $amount = $nightHours
+                            * $hourlyRate
+                            * $nightShiftDifferentialRate;
+
+                        $nightShiftPay += $amount;
+                    }
+
+                    continue;
+                }
+
+                /*
+                 * -------------------------------------------------
+                 * REGULAR WORKING DAY
+                 * -------------------------------------------------
+                 */
+
+                if ($attendance->status === 'present') {
+
+                    /*
+                     * Regular-day attendance is already included
+                     * in the employee's basic salary.
+                     *
+                     * Therefore we do not add the 100% regular
+                     * day amount again here.
+                     */
+
+                    $regularMinutes = (int) $attendance->regular_minutes;
+
+                    if ($regularMinutes > 0) {
+                        $regularDayPay += 0;
+                    }
+
+                    /*
+                     * Approved regular-day overtime
+                     */
+
+                    $approvedOtMinutes = (int) $attendance->approved_overtime_minutes;
+
+                    if (
+                        $attendance->overtime_status === 'approved'
+                        && $approvedOtMinutes > 0
+                    ) {
+                        $otHours = $approvedOtMinutes / 60;
+
+                        $amount = $otHours
+                            * $hourlyRate
+                            * $regularDayOvertimeRate;
+
+                        $overtimePay += $amount;
+                    }
+
+                    /*
+                     * NSD
+                     */
+
+                    $nightMinutes = (int) $attendance->night_shift_minutes;
+
+                    if ($nightMinutes > 0) {
+
+                        $nightHours = $nightMinutes / 60;
+
+                        $amount = $nightHours
+                            * $hourlyRate
+                            * $nightShiftDifferentialRate;
+
+                        $nightShiftPay += $amount;
+                    }
+                }
+            }
+
+            /*
+             * -------------------------------------------------
+             * CREATE REST DAY PAY ITEM
+             * -------------------------------------------------
+             */
+
+            if ($restDayPay > 0) {
+
+                $payroll->items()->create([
+                    'item_type' => 'earning',
+                    'code' => 'REST_DAY',
+                    'description' => 'Rest Day Pay',
+                    'quantity' => 1,
+                    'rate' => $restDayRate * 100,
+                    'amount' => round($restDayPay, 2),
+                    'sort_order' => 30,
+                ]);
+            }
+
+            /*
+             * -------------------------------------------------
+             * CREATE OVERTIME PAY ITEM
+             * -------------------------------------------------
+             */
+
+            if ($overtimePay > 0) {
+
+                $payroll->items()->create([
+                    'item_type' => 'earning',
+                    'code' => 'OVERTIME',
+                    'description' => 'Approved Overtime Pay',
+                    'quantity' => 1,
+                    'rate' => 0,
+                    'amount' => round($overtimePay, 2),
+                    'sort_order' => 40,
+                ]);
+            }
+
+            /*
+             * -------------------------------------------------
+             * CREATE NSD PAY ITEM
+             * -------------------------------------------------
+             */
+
+            if ($nightShiftPay > 0) {
+
+                $payroll->items()->create([
+                    'item_type' => 'earning',
+                    'code' => 'NSD',
+                    'description' => 'Night Shift Differential',
+                    'quantity' => 1,
+                    'rate' => $nightShiftDifferentialRate * 100,
+                    'amount' => round($nightShiftPay, 2),
+                    'sort_order' => 50,
+                ]);
+            }
+
+            /*
+             * -------------------------------------------------
+             * TOTAL OTHER EARNINGS
+             * -------------------------------------------------
+             */
+
             $otherEarnings = 0;
+
+            /*
+             * -------------------------------------------------
+             * TOTAL PREMIUM PAY
+             * -------------------------------------------------
+             */
+
+            $premiumPay =
+                $regularDayPay
+                + $restDayPay
+                + $overtimePay
+                + $nightShiftPay;
 
             /*
              * -------------------------------------------------
@@ -162,16 +441,13 @@ class PayrollCalculator
             $grossPay =
                 $basicPay
                 + $allowancesTotal
-                + $overtimePay
+                + $premiumPay
                 + $otherEarnings;
 
             /*
              * -------------------------------------------------
              * DEDUCTIONS
              * -------------------------------------------------
-             *
-             * All deductions are handled by the
-             * DeductionCalculator.
              */
 
             $deductions = $this->deductionCalculator->calculate(
@@ -254,7 +530,29 @@ class PayrollCalculator
     }
 
     /**
-     * Calculate basic pay based on employee pay frequency.
+     * Get a payroll percentage from the settings table.
+     *
+     * Example:
+     *
+     * 125 stored in database
+     * becomes
+     * 1.25 for calculation.
+     */
+    private function getPayrollRate(
+        string $key,
+        float $default
+    ): float {
+        return (
+            (float) Setting::getValue(
+                'payroll',
+                $key,
+                $default
+            )
+        ) / 100;
+    }
+
+    /**
+     * Calculate basic pay according to employee pay frequency.
      */
     private function calculateBasicPay(
         float $monthlySalary,
@@ -280,6 +578,34 @@ class PayrollCalculator
             'daily' => ($monthlySalary * 12) / 313,
 
             default => $monthlySalary / 2,
+        };
+    }
+
+    /**
+     * Calculate the daily rate used for premium pay.
+     *
+     * For now, this uses the monthly salary / 26.
+     *
+     * This is appropriate for the current premium-pay
+     * calculation where one working day is treated as
+     * 8 hours.
+     */
+    private function calculateDailyRate(
+        float $monthlySalary,
+        string $frequency
+    ): float {
+        return match (
+            strtolower(
+                str_replace(
+                    ['-', ' '],
+                    '_',
+                    $frequency
+                )
+            )
+        ) {
+            'daily' => $monthlySalary,
+
+            default => $monthlySalary / 26,
         };
     }
 }
