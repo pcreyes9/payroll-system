@@ -14,6 +14,7 @@ use Filament\Pages\Page;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use UnitEnum;
 
@@ -45,6 +46,7 @@ class AttendanceRecords extends Page implements HasForms
     | EDIT / REVIEW MODAL
     |--------------------------------------------------------------------------
     */
+
     public bool $showAttendanceModal = false;
 
     public ?int $editingAttendanceId = null;
@@ -78,6 +80,25 @@ class AttendanceRecords extends Page implements HasForms
 
     /*
     |--------------------------------------------------------------------------
+    | ADD ATTENDANCE MODAL
+    |--------------------------------------------------------------------------
+    */
+
+    public bool $showAddAttendanceModal = false;
+
+    public array $addAttendanceData = [
+        'attendance_date' => null,
+        'employee_ids' => [],
+        'time_in' => '09:00',
+        'time_out' => '17:00',
+        'status' => 'present',
+        'remarks' => null,
+    ];
+
+    public bool $selectAllEmployees = false;
+
+    /*
+    |--------------------------------------------------------------------------
     | MOUNT
     |--------------------------------------------------------------------------
     */
@@ -91,6 +112,7 @@ class AttendanceRecords extends Page implements HasForms
         ]);
 
         $this->resetAttendanceModal();
+        $this->resetAddAttendanceModal();
     }
 
     /*
@@ -168,6 +190,21 @@ class AttendanceRecords extends Page implements HasForms
                     ->columns(3),
             ])
             ->statePath('data');
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | ACTIVE EMPLOYEES
+    |--------------------------------------------------------------------------
+    */
+
+    public function getActiveEmployeesProperty(): Collection
+    {
+        return Employee::query()
+            ->where('employment_status', 'active')
+            ->orderBy('last_name')
+            ->orderBy('first_name')
+            ->get();
     }
 
     /*
@@ -275,6 +312,373 @@ class AttendanceRecords extends Page implements HasForms
 
     /*
     |--------------------------------------------------------------------------
+    | ADD ATTENDANCE
+    |--------------------------------------------------------------------------
+    */
+
+    public function openAddAttendanceModal(): void
+    {
+        $this->resetAddAttendanceModal();
+
+        $month = $this->data['month']
+            ?? now()->format('Y-m');
+
+        $this->addAttendanceData['attendance_date'] =
+            Carbon::createFromFormat(
+                'Y-m',
+                $month
+            )
+                ->startOfMonth()
+                ->format('Y-m-d');
+
+        $this->showAddAttendanceModal = true;
+    }
+
+    public function closeAddAttendanceModal(): void
+    {
+        $this->showAddAttendanceModal = false;
+
+        $this->resetAddAttendanceModal();
+    }
+
+    protected function resetAddAttendanceModal(): void
+    {
+        $this->addAttendanceData = [
+            'attendance_date' => now()->format('Y-m-d'),
+            'employee_ids' => [],
+            'time_in' => '09:00',
+            'time_out' => '17:00',
+            'status' => 'present',
+            'remarks' => null,
+        ];
+
+        $this->selectAllEmployees = false;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | SELECT / DESELECT ALL EMPLOYEES
+    |--------------------------------------------------------------------------
+    */
+
+    public function toggleAllEmployees(): void
+    {
+        $activeEmployeeIds = Employee::query()
+            ->where('employment_status', 'active')
+            ->orderBy('last_name')
+            ->orderBy('first_name')
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+
+        if ($this->selectAllEmployees) {
+            $this->addAttendanceData['employee_ids'] =
+                $activeEmployeeIds;
+        } else {
+            $this->addAttendanceData['employee_ids'] = [];
+        }
+    }
+
+    public function updatedAddAttendanceDataEmployeeIds(): void
+    {
+        $activeEmployeeCount = Employee::query()
+            ->where('employment_status', 'active')
+            ->count();
+
+        $selectedCount = count(
+            $this->addAttendanceData['employee_ids'] ?? []
+        );
+
+        $this->selectAllEmployees =
+            $activeEmployeeCount > 0
+            && $selectedCount === $activeEmployeeCount;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | SAVE NEW ATTENDANCE FOR SELECTED EMPLOYEES
+    |--------------------------------------------------------------------------
+    */
+
+    public function addAttendance(): void
+    {
+        $this->validate([
+            'addAttendanceData.attendance_date' => [
+                'required',
+                'date',
+            ],
+
+            'addAttendanceData.employee_ids' => [
+                'required',
+                'array',
+                'min:1',
+            ],
+
+            'addAttendanceData.employee_ids.*' => [
+                'integer',
+                Rule::exists('employees', 'id')
+                    ->where(
+                        fn ($query) => $query->where(
+                            'employment_status',
+                            'active'
+                        )
+                    ),
+            ],
+
+            'addAttendanceData.time_in' => [
+                'nullable',
+                'date_format:H:i',
+            ],
+
+            'addAttendanceData.time_out' => [
+                'nullable',
+                'date_format:H:i',
+            ],
+
+            'addAttendanceData.status' => [
+                'required',
+                Rule::in([
+                    'present',
+                    'absent',
+                    'vl',
+                    'sl',
+                    'half_day',
+                    'rest_day',
+                    'regular_holiday',
+                    'special_non_working_holiday',
+                    'emergency_leave',
+                    'lwop',
+                ]),
+            ],
+
+            'addAttendanceData.remarks' => [
+                'nullable',
+                'string',
+                'max:1000',
+            ],
+        ]);
+
+        $date = Carbon::parse(
+            $this->addAttendanceData['attendance_date']
+        )->format('Y-m-d');
+
+        $employeeIds = collect(
+            $this->addAttendanceData['employee_ids'] ?? []
+        )
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        if ($employeeIds->isEmpty()) {
+            Notification::make()
+                ->title('No employees selected')
+                ->body('Please select at least one employee.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $status = $this->addAttendanceData['status'];
+
+        $timeIn = $this->addAttendanceData['time_in']
+            ?: null;
+
+        $timeOut = $this->addAttendanceData['time_out']
+            ?: null;
+
+        $remarks = $this->addAttendanceData['remarks']
+            ?: null;
+
+        /*
+        |--------------------------------------------------------------------------
+        | LEAVE / ABSENCE STATUSES
+        |--------------------------------------------------------------------------
+        |
+        | These statuses should not produce worked hours,
+        | late, undertime, or overtime.
+        |
+        */
+
+        $zeroWorkStatuses = [
+            'absent',
+            'vl',
+            'sl',
+            'emergency_leave',
+            'lwop',
+        ];
+
+        $created = 0;
+        $skipped = 0;
+
+        DB::transaction(function () use (
+            $employeeIds,
+            $date,
+            $timeIn,
+            $timeOut,
+            $status,
+            $remarks,
+            $zeroWorkStatuses,
+            &$created,
+            &$skipped
+        ) {
+            foreach ($employeeIds as $employeeId) {
+
+                $employee = Employee::find($employeeId);
+
+                if (! $employee) {
+                    continue;
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | DUPLICATE CHECK
+                |--------------------------------------------------------------------------
+                */
+
+                $exists = AttendanceRecord::query()
+                    ->where('employee_id', $employeeId)
+                    ->whereDate('attendance_date', $date)
+                    ->exists();
+
+                if ($exists) {
+                    $skipped++;
+
+                    continue;
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | CREATE RECORD
+                |--------------------------------------------------------------------------
+                */
+
+                $attendance = AttendanceRecord::create([
+                    'employee_id' => $employeeId,
+                    'attendance_date' => $date,
+
+                    'time_in' => $timeIn,
+                    'time_out' => $timeOut,
+
+                    'status' => $status,
+
+                    'remarks' => $remarks,
+
+                    'worked_minutes' => 0,
+                    'regular_minutes' => 0,
+                    'rest_day_minutes' => 0,
+                    'rest_day_overtime_minutes' => 0,
+                    'night_shift_minutes' => 0,
+
+                    'late_minutes' => 0,
+                    'undertime_minutes' => 0,
+
+                    'overtime_minutes' => 0,
+                    'detected_overtime_minutes' => 0,
+                    'approved_overtime_minutes' => 0,
+
+                    'overtime_status' => 'none',
+                ]);
+
+                /*
+                |--------------------------------------------------------------------------
+                | LEAVE / ABSENT
+                |--------------------------------------------------------------------------
+                */
+
+                if (
+                    in_array(
+                        $status,
+                        $zeroWorkStatuses,
+                        true
+                    )
+                ) {
+                    $attendance->update([
+                        'worked_minutes' => 0,
+                        'regular_minutes' => 0,
+                        'rest_day_minutes' => 0,
+                        'rest_day_overtime_minutes' => 0,
+                        'night_shift_minutes' => 0,
+
+                        'late_minutes' => 0,
+                        'undertime_minutes' => 0,
+
+                        'detected_overtime_minutes' => 0,
+                        'approved_overtime_minutes' => 0,
+                        'overtime_minutes' => 0,
+
+                        'overtime_status' => 'none',
+
+                        'overtime_approved_by' => null,
+                        'overtime_approved_at' => null,
+                        'overtime_remarks' => null,
+                    ]);
+                } else {
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | NORMAL ATTENDANCE CALCULATION
+                    |--------------------------------------------------------------------------
+                    */
+
+                    app(AttendanceCalculator::class)
+                        ->calculate($attendance);
+
+                    $attendance->refresh();
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | PRESERVE MANUAL STATUS
+                    |--------------------------------------------------------------------------
+                    */
+
+                    if (
+                        in_array(
+                            $status,
+                            [
+                                'half_day',
+                                'regular_holiday',
+                                'special_non_working_holiday',
+                                'rest_day',
+                            ],
+                            true
+                        )
+                    ) {
+                        $attendance->update([
+                            'status' => $status,
+                        ]);
+                    }
+                }
+
+                $created++;
+            }
+        });
+
+        /*
+        |--------------------------------------------------------------------------
+        | NOTIFICATION
+        |--------------------------------------------------------------------------
+        */
+
+        $body = "{$created} attendance record(s) added.";
+
+        if ($skipped > 0) {
+            $body .=
+                " {$skipped} skipped because attendance already exists for this date.";
+        }
+
+        Notification::make()
+            ->title('Attendance added')
+            ->body($body)
+            ->success()
+            ->send();
+
+        $this->closeAddAttendanceModal();
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | OPEN ATTENDANCE / OT REVIEW
     |--------------------------------------------------------------------------
     */
@@ -286,7 +690,8 @@ class AttendanceRecords extends Page implements HasForms
         $this->selectedAttendanceId = $attendance->id;
 
         $this->editAttendanceData = [
-            'attendance_date' => $attendance->attendance_date?->format('Y-m-d'),
+            'attendance_date' =>
+                $attendance->attendance_date?->format('Y-m-d'),
 
             'time_in' => $attendance->time_in
                 ? Carbon::parse($attendance->time_in)->format('H:i')
@@ -307,7 +712,8 @@ class AttendanceRecords extends Page implements HasForms
                     ? (int) $attendance->approved_overtime_minutes
                     : (int) $attendance->detected_overtime_minutes,
 
-            'overtime_remarks' => $attendance->overtime_remarks,
+            'overtime_remarks' =>
+                $attendance->overtime_remarks,
         ];
 
         $this->showAttendanceModal = true;
@@ -381,7 +787,10 @@ class AttendanceRecords extends Page implements HasForms
             'editAttendanceData.attendance_date' => [
                 'required',
                 'date',
-                Rule::unique('attendance_records', 'attendance_date')
+                Rule::unique(
+                    'attendance_records',
+                    'attendance_date'
+                )
                     ->where(
                         fn ($query) => $query->where(
                             'employee_id',
@@ -424,9 +833,11 @@ class AttendanceRecords extends Page implements HasForms
             ],
         ]);
 
-        $oldDetectedOt = (int) $attendance->detected_overtime_minutes;
+        $oldDetectedOt =
+            (int) $attendance->detected_overtime_minutes;
 
-        $status = $this->editAttendanceData['status'];
+        $status =
+            $this->editAttendanceData['status'];
 
         $attendance->update([
             'attendance_date' =>
@@ -451,9 +862,6 @@ class AttendanceRecords extends Page implements HasForms
         |--------------------------------------------------------------------------
         | LEAVE / ABSENCE STATUSES
         |--------------------------------------------------------------------------
-        |
-        | These statuses should not produce worked hours or overtime.
-        |
         */
 
         if (
@@ -475,12 +883,16 @@ class AttendanceRecords extends Page implements HasForms
                 'rest_day_minutes' => 0,
                 'rest_day_overtime_minutes' => 0,
                 'night_shift_minutes' => 0,
+
                 'late_minutes' => 0,
                 'undertime_minutes' => 0,
+
                 'detected_overtime_minutes' => 0,
                 'approved_overtime_minutes' => 0,
                 'overtime_minutes' => 0,
+
                 'overtime_status' => 'none',
+
                 'overtime_approved_by' => null,
                 'overtime_approved_at' => null,
                 'overtime_remarks' => null,
@@ -488,6 +900,7 @@ class AttendanceRecords extends Page implements HasForms
 
             $attendance->refresh();
         } else {
+
             /*
             |--------------------------------------------------------------------------
             | RECALCULATE ATTENDANCE
@@ -503,11 +916,6 @@ class AttendanceRecords extends Page implements HasForms
             |--------------------------------------------------------------------------
             | PRESERVE MANUAL STATUS
             |--------------------------------------------------------------------------
-            |
-            | AttendanceCalculator determines Present / Rest Day automatically.
-            | We allow the manually selected Half Day / Holiday statuses
-            | to remain after calculation.
-            |
             */
 
             if (
@@ -517,24 +925,13 @@ class AttendanceRecords extends Page implements HasForms
                         'half_day',
                         'regular_holiday',
                         'special_non_working_holiday',
+                        'rest_day',
                     ],
                     true
                 )
             ) {
                 $attendance->update([
                     'status' => $status,
-                ]);
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | IF MANUALLY SET TO REST DAY
-            |--------------------------------------------------------------------------
-            */
-
-            if ($status === 'rest_day') {
-                $attendance->update([
-                    'status' => 'rest_day',
                 ]);
             }
 
@@ -545,10 +942,6 @@ class AttendanceRecords extends Page implements HasForms
         |--------------------------------------------------------------------------
         | DETECTED OT CHANGED
         |--------------------------------------------------------------------------
-        |
-        | AttendanceCalculator normally handles this.
-        | This extra check protects against stale approvals.
-        |
         */
 
         if (
@@ -557,12 +950,15 @@ class AttendanceRecords extends Page implements HasForms
         ) {
             $this->overtimeApprovalData[
                 'approved_overtime_minutes'
-            ] = (int) $attendance->detected_overtime_minutes;
+            ] =
+                (int) $attendance->detected_overtime_minutes;
         }
 
         Notification::make()
             ->title('Attendance updated')
-            ->body('Attendance has been recalculated successfully.')
+            ->body(
+                'Attendance has been recalculated successfully.'
+            )
             ->success()
             ->send();
 
@@ -585,11 +981,6 @@ class AttendanceRecords extends Page implements HasForms
         |--------------------------------------------------------------------------
         | SAVE CURRENT ATTENDANCE EDITS FIRST
         |--------------------------------------------------------------------------
-        |
-        | This makes the modal truly combined.
-        | If the user changes Time In / Time Out and immediately clicks
-        | Approve OT, those changes are saved first.
-        |
         */
 
         $this->persistAttendanceChanges();
@@ -598,8 +989,8 @@ class AttendanceRecords extends Page implements HasForms
             $this->selectedAttendanceId
         );
 
-        $detectedMinutes = (int)
-            $attendance->detected_overtime_minutes;
+        $detectedMinutes =
+            (int) $attendance->detected_overtime_minutes;
 
         if ($detectedMinutes <= 0) {
             Notification::make()
@@ -637,7 +1028,9 @@ class AttendanceRecords extends Page implements HasForms
         */
 
         if ($approvedMinutes === 0) {
-            $this->markOvertimeRejected($attendance);
+            $this->markOvertimeRejected(
+                $attendance
+            );
 
             return;
         }
@@ -707,7 +1100,9 @@ class AttendanceRecords extends Page implements HasForms
             $this->selectedAttendanceId
         );
 
-        $this->markOvertimeRejected($attendance);
+        $this->markOvertimeRejected(
+            $attendance
+        );
     }
 
     /*
@@ -769,7 +1164,10 @@ class AttendanceRecords extends Page implements HasForms
             'editAttendanceData.attendance_date' => [
                 'required',
                 'date',
-                Rule::unique('attendance_records', 'attendance_date')
+                Rule::unique(
+                    'attendance_records',
+                    'attendance_date'
+                )
                     ->where(
                         fn ($query) => $query->where(
                             'employee_id',
@@ -812,7 +1210,8 @@ class AttendanceRecords extends Page implements HasForms
             ],
         ]);
 
-        $status = $this->editAttendanceData['status'];
+        $status =
+            $this->editAttendanceData['status'];
 
         $attendance->update([
             'attendance_date' =>
@@ -858,12 +1257,16 @@ class AttendanceRecords extends Page implements HasForms
                 'rest_day_minutes' => 0,
                 'rest_day_overtime_minutes' => 0,
                 'night_shift_minutes' => 0,
+
                 'late_minutes' => 0,
                 'undertime_minutes' => 0,
+
                 'detected_overtime_minutes' => 0,
                 'approved_overtime_minutes' => 0,
                 'overtime_minutes' => 0,
+
                 'overtime_status' => 'none',
+
                 'overtime_approved_by' => null,
                 'overtime_approved_at' => null,
                 'overtime_remarks' => null,
@@ -923,9 +1326,13 @@ class AttendanceRecords extends Page implements HasForms
             return '0 min';
         }
 
-        $hours = intdiv($minutes, 60);
+        $hours = intdiv(
+            $minutes,
+            60
+        );
 
-        $remainingMinutes = $minutes % 60;
+        $remainingMinutes =
+            $minutes % 60;
 
         if ($hours === 0) {
             return $remainingMinutes . ' min';

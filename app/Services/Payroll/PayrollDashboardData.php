@@ -5,6 +5,7 @@ namespace App\Services\Payroll;
 use App\Models\AttendanceRecord;
 use App\Models\Payroll;
 use App\Models\Setting;
+use Carbon\Carbon;
 
 class PayrollDashboardData
 {
@@ -39,22 +40,17 @@ class PayrollDashboardData
                 return '—';
             }
 
-            $hours = intdiv($minutes, 60);
-            $remaining = $minutes % 60;
-
-            if ($hours && $remaining) {
-                return "{$hours} hr {$remaining} min";
-            }
-
-            if ($hours) {
-                return "{$hours} hr";
-            }
-
-            return "{$remaining} min";
+            return number_format(
+                $minutes / 60,
+                2
+            );
         };
 
         $money = static function ($amount): string {
-            return '₱' . number_format((float) $amount, 2);
+            return '₱' . number_format(
+                (float) $amount,
+                2
+            );
         };
 
         /*
@@ -96,8 +92,11 @@ class PayrollDashboardData
         $overtimePay = (float) $record->overtime_pay;
         $grossPay = (float) $record->gross_pay;
 
-        $totalDeductions = (float) $record->total_deductions;
-        $netPay = (float) $record->net_pay;
+        $totalDeductions =
+            (float) $record->total_deductions;
+
+        $netPay =
+            (float) $record->net_pay;
 
         /*
          * -------------------------------------------------
@@ -147,11 +146,12 @@ class PayrollDashboardData
             150
         );
 
-        $specialHolidayRestDayOvertimeRate = (float) Setting::getValue(
-            'payroll',
-            'special_holiday_rest_day_overtime_rate',
-            195
-        );
+        $specialHolidayRestDayOvertimeRate =
+            (float) Setting::getValue(
+                'payroll',
+                'special_holiday_rest_day_overtime_rate',
+                195
+            );
 
         $regularHolidayRate = (float) Setting::getValue(
             'payroll',
@@ -171,11 +171,12 @@ class PayrollDashboardData
             260
         );
 
-        $regularHolidayRestDayOvertimeRate = (float) Setting::getValue(
-            'payroll',
-            'regular_holiday_rest_day_overtime_rate',
-            338
-        );
+        $regularHolidayRestDayOvertimeRate =
+            (float) Setting::getValue(
+                'payroll',
+                'regular_holiday_rest_day_overtime_rate',
+                338
+            );
 
         $nightShiftDifferentialRate = (float) Setting::getValue(
             'payroll',
@@ -188,11 +189,16 @@ class PayrollDashboardData
          * SALARY BASIS
          * -------------------------------------------------
          *
-         * Monthly salary / 26 working days / 8 hours.
+         * Monthly Salary × 12 ÷ 260
          */
 
-        $dailyRate = $basicSalary / 26;
-        $hourlyRate = $dailyRate / 8;
+        $dailyRate = round(
+            ($basicSalary * 12) / 260,
+            2
+        );
+
+        $hourlyRate =
+            $dailyRate / 8;
 
         /*
          * -------------------------------------------------
@@ -201,57 +207,329 @@ class PayrollDashboardData
          */
 
         $regularHourlyAmount =
-            $hourlyRate * ($regularDayRate / 100);
+            $hourlyRate
+            * ($regularDayRate / 100);
 
         $regularOtHourlyAmount =
-            $hourlyRate * ($regularDayOvertimeRate / 100);
+            $hourlyRate
+            * ($regularDayOvertimeRate / 100);
 
         $restDayHourlyAmount =
-            $hourlyRate * ($restDayRate / 100);
+            $hourlyRate
+            * ($restDayRate / 100);
 
         $restDayOtHourlyAmount =
-            $hourlyRate * ($restDayOvertimeRate / 100);
+            $hourlyRate
+            * ($restDayOvertimeRate / 100);
 
         $specialHolidayHourlyAmount =
-            $hourlyRate * ($specialHolidayRate / 100);
+            $hourlyRate
+            * ($specialHolidayRate / 100);
 
         $specialHolidayOtHourlyAmount =
-            $hourlyRate * ($specialHolidayOvertimeRate / 100);
+            $hourlyRate
+            * ($specialHolidayOvertimeRate / 100);
 
         $specialHolidayRestDayHourlyAmount =
-            $hourlyRate * ($specialHolidayRestDayRate / 100);
+            $hourlyRate
+            * ($specialHolidayRestDayRate / 100);
 
         $specialHolidayRestDayOtHourlyAmount =
-            $hourlyRate * ($specialHolidayRestDayOvertimeRate / 100);
+            $hourlyRate
+            * ($specialHolidayRestDayOvertimeRate / 100);
 
         $regularHolidayHourlyAmount =
-            $hourlyRate * ($regularHolidayRate / 100);
+            $hourlyRate
+            * ($regularHolidayRate / 100);
 
         $regularHolidayOtHourlyAmount =
-            $hourlyRate * ($regularHolidayOvertimeRate / 100);
+            $hourlyRate
+            * ($regularHolidayOvertimeRate / 100);
 
         $regularHolidayRestDayHourlyAmount =
-            $hourlyRate * ($regularHolidayRestDayRate / 100);
+            $hourlyRate
+            * ($regularHolidayRestDayRate / 100);
 
         $regularHolidayRestDayOtHourlyAmount =
-            $hourlyRate * ($regularHolidayRestDayOvertimeRate / 100);
+            $hourlyRate
+            * ($regularHolidayRestDayOvertimeRate / 100);
 
         $nsdHourlyAmount =
-            $hourlyRate * ($nightShiftDifferentialRate / 100);
+            $hourlyRate
+            * ($nightShiftDifferentialRate / 100);
 
         /*
          * -------------------------------------------------
-         * APPROVED OT
+         * OT TOTALS
          * -------------------------------------------------
          */
 
         $weekdayOt = (int) $attendanceRecords
-            ->filter(fn ($item) => $item->status === 'present')
+            ->filter(
+                fn ($item) =>
+                    $item->status === 'present'
+            )
             ->sum('approved_overtime_minutes');
 
         $restDayOt = (int) $attendanceRecords
-            ->filter(fn ($item) => $item->status === 'rest_day')
+            ->filter(
+                fn ($item) =>
+                    $item->status === 'rest_day'
+            )
             ->sum('approved_overtime_minutes');
+
+        /*
+         * -------------------------------------------------
+         * OT + NSD OVERLAP
+         * -------------------------------------------------
+         *
+         * This is the important part.
+         *
+         * We DO NOT assume that all OT is NSD.
+         *
+         * We determine which approved OT minutes actually
+         * overlap with the configured NSD period.
+         */
+
+        $weekdayOtNsdMinutes = 0;
+        $restDayOtNsdMinutes = 0;
+
+        foreach ($attendanceRecords as $attendance) {
+
+            $approvedOtMinutes = (int) (
+                $attendance->approved_overtime_minutes
+            );
+
+            if (
+                $attendance->overtime_status !== 'approved'
+                || $approvedOtMinutes <= 0
+                || ! $attendance->time_out
+            ) {
+                continue;
+            }
+
+            /*
+             * Only calculate overlap for actual OT records.
+             */
+
+            if (
+                ! in_array(
+                    $attendance->status,
+                    [
+                        'present',
+                        'rest_day',
+                    ],
+                    true
+                )
+            ) {
+                continue;
+            }
+
+            $date = $attendance
+                ->attendance_date
+                ->format('Y-m-d');
+
+            $timeOut = Carbon::parse(
+                $date . ' ' .
+                $attendance->time_out->format('H:i:s')
+            );
+
+            /*
+             * -------------------------------------------------
+             * DETERMINE OT START
+             * -------------------------------------------------
+             *
+             * Regular working day:
+             *
+             * Official Time Out → Time Out
+             *
+             * Rest day:
+             *
+             * First 8 hours → regular rest-day work
+             * Remaining time → rest-day OT
+             */
+
+            if ($attendance->status === 'present') {
+
+                $officialTimeOut =
+                    Setting::getValue(
+                        'attendance',
+                        'official_time_out',
+                        '17:00'
+                    );
+
+                $otStart = Carbon::parse(
+                    $date . ' ' . $officialTimeOut
+                );
+
+            } else {
+
+                /*
+                 * Rest-day OT starts after 8 hours
+                 * of work.
+                 */
+
+                $timeIn = Carbon::parse(
+                    $date . ' ' .
+                    $attendance->time_in->format('H:i:s')
+                );
+
+                $otStart =
+                    $timeIn->copy()->addHours(8);
+            }
+
+            /*
+             * Do not allow an invalid OT interval.
+             */
+
+            if ($timeOut->lessThanOrEqualTo($otStart)) {
+                continue;
+            }
+
+            /*
+             * Detected OT interval.
+             */
+
+            $detectedOtMinutes =
+                $otStart->diffInMinutes($timeOut);
+
+            /*
+             * We treat approved OT as the final approved
+             * portion immediately before Time Out.
+             *
+             * This works correctly for normal full OT approval
+             * and for partial approval.
+             */
+
+            $approvedOtMinutes =
+                min(
+                    $approvedOtMinutes,
+                    $detectedOtMinutes
+                );
+
+            $approvedOtStart =
+                $timeOut->copy()->subMinutes(
+                    $approvedOtMinutes
+                );
+
+            /*
+             * -------------------------------------------------
+             * NSD WINDOW
+             * -------------------------------------------------
+             */
+
+            $nightStartTime =
+                Setting::getValue(
+                    'attendance',
+                    'night_shift_differential_start',
+                    '22:00'
+                );
+
+            $nightEndTime =
+                Setting::getValue(
+                    'attendance',
+                    'night_shift_differential_end',
+                    '06:00'
+                );
+
+            /*
+             * Check both the same-day and previous-day NSD
+             * windows because NSD may cross midnight.
+             */
+
+            $nsdWindows = [];
+
+            $currentNightStart = Carbon::parse(
+                $date . ' ' . $nightStartTime
+            );
+
+            $currentNightEnd = Carbon::parse(
+                $date . ' ' . $nightEndTime
+            );
+
+            if (
+                $currentNightEnd
+                    ->lessThanOrEqualTo($currentNightStart)
+            ) {
+                $currentNightEnd->addDay();
+            }
+
+            $nsdWindows[] = [
+                $currentNightStart,
+                $currentNightEnd,
+            ];
+
+            /*
+             * Previous day's NSD window.
+             */
+
+            $previousNightStart =
+                $currentNightStart->copy()->subDay();
+
+            $previousNightEnd =
+                $currentNightEnd->copy()->subDay();
+
+            $nsdWindows[] = [
+                $previousNightStart,
+                $previousNightEnd,
+            ];
+
+            /*
+             * Calculate overlap.
+             */
+
+            $overlapMinutes = 0;
+
+            foreach ($nsdWindows as [$nsdStart, $nsdEnd]) {
+
+                $overlapStart =
+                    $approvedOtStart->greaterThan($nsdStart)
+                        ? $approvedOtStart
+                        : $nsdStart;
+
+                $overlapEnd =
+                    $timeOut->lessThan($nsdEnd)
+                        ? $timeOut
+                        : $nsdEnd;
+
+                if (
+                    $overlapEnd
+                        ->greaterThan($overlapStart)
+                ) {
+                    $overlapMinutes +=
+                        $overlapStart->diffInMinutes(
+                            $overlapEnd
+                        );
+                }
+            }
+
+            if ($attendance->status === 'present') {
+
+                $weekdayOtNsdMinutes +=
+                    min(
+                        $overlapMinutes,
+                        $approvedOtMinutes
+                    );
+
+            } elseif ($attendance->status === 'rest_day') {
+
+                $restDayOtNsdMinutes +=
+                    min(
+                        $overlapMinutes,
+                        $approvedOtMinutes
+                    );
+            }
+        }
+
+        /*
+         * -------------------------------------------------
+         * OT + NSD HOURS
+         * -------------------------------------------------
+         */
+
+        $totalOtNsdMinutes =
+            $weekdayOtNsdMinutes
+            + $restDayOtNsdMinutes;
 
         /*
          * -------------------------------------------------
@@ -274,6 +552,52 @@ class PayrollDashboardData
         $nightShiftDifferentialAmount =
             ($totalNsdMinutes / 60)
             * $nsdHourlyAmount;
+
+        /*
+         * -------------------------------------------------
+         * OT + NSD COMBINED DISPLAY AMOUNTS
+         * -------------------------------------------------
+         *
+         * IMPORTANT:
+         *
+         * These are DISPLAY values only.
+         *
+         * They are NOT added again to gross pay.
+         *
+         * The OT portion already exists in overtimePay.
+         * The NSD portion already exists in nightShiftPay.
+         *
+         * This table simply shows their combined value
+         * for the hours that overlap.
+         */
+
+        $weekdayOtNsdHourlyAmount =
+            $hourlyRate
+            * (
+                ($regularDayOvertimeRate / 100)
+                +
+                ($nightShiftDifferentialRate / 100)
+            );
+
+        $restDayOtNsdHourlyAmount =
+            $hourlyRate
+            * (
+                ($restDayOvertimeRate / 100)
+                +
+                ($nightShiftDifferentialRate / 100)
+            );
+
+        $weekdayOtNsdAmount =
+            ($weekdayOtNsdMinutes / 60)
+            * $weekdayOtNsdHourlyAmount;
+
+        $restDayOtNsdAmount =
+            ($restDayOtNsdMinutes / 60)
+            * $restDayOtNsdHourlyAmount;
+
+        $totalOtNsdAmount =
+            $weekdayOtNsdAmount
+            + $restDayOtNsdAmount;
 
         /*
          * -------------------------------------------------
@@ -306,13 +630,26 @@ class PayrollDashboardData
             /*
              * Attendance
              */
-            'totalRegularMinutes' => $totalRegularMinutes,
-            'totalLateMinutes' => $totalLateMinutes,
-            'totalUndertimeMinutes' => $totalUndertimeMinutes,
-            'totalRestDayMinutes' => $totalRestDayMinutes,
-            'totalDetectedOtMinutes' => $totalDetectedOtMinutes,
-            'totalApprovedOtMinutes' => $totalApprovedOtMinutes,
-            'totalNsdMinutes' => $totalNsdMinutes,
+            'totalRegularMinutes' =>
+                $totalRegularMinutes,
+
+            'totalLateMinutes' =>
+                $totalLateMinutes,
+
+            'totalUndertimeMinutes' =>
+                $totalUndertimeMinutes,
+
+            'totalRestDayMinutes' =>
+                $totalRestDayMinutes,
+
+            'totalDetectedOtMinutes' =>
+                $totalDetectedOtMinutes,
+
+            'totalApprovedOtMinutes' =>
+                $totalApprovedOtMinutes,
+
+            'totalNsdMinutes' =>
+                $totalNsdMinutes,
 
             /*
              * Payroll
@@ -334,68 +671,146 @@ class PayrollDashboardData
             /*
              * Rates
              */
-            'regularDayRate' => $regularDayRate,
-            'regularDayOvertimeRate' => $regularDayOvertimeRate,
+            'regularDayRate' =>
+                $regularDayRate,
 
-            'restDayRate' => $restDayRate,
-            'restDayOvertimeRate' => $restDayOvertimeRate,
+            'regularDayOvertimeRate' =>
+                $regularDayOvertimeRate,
 
-            'specialHolidayRate' => $specialHolidayRate,
-            'specialHolidayOvertimeRate' => $specialHolidayOvertimeRate,
+            'restDayRate' =>
+                $restDayRate,
 
-            'specialHolidayRestDayRate' => $specialHolidayRestDayRate,
-            'specialHolidayRestDayOvertimeRate' => $specialHolidayRestDayOvertimeRate,
+            'restDayOvertimeRate' =>
+                $restDayOvertimeRate,
 
-            'regularHolidayRate' => $regularHolidayRate,
-            'regularHolidayOvertimeRate' => $regularHolidayOvertimeRate,
+            'specialHolidayRate' =>
+                $specialHolidayRate,
 
-            'regularHolidayRestDayRate' => $regularHolidayRestDayRate,
-            'regularHolidayRestDayOvertimeRate' => $regularHolidayRestDayOvertimeRate,
+            'specialHolidayOvertimeRate' =>
+                $specialHolidayOvertimeRate,
 
-            'nightShiftDifferentialRate' => $nightShiftDifferentialRate,
+            'specialHolidayRestDayRate' =>
+                $specialHolidayRestDayRate,
+
+            'specialHolidayRestDayOvertimeRate' =>
+                $specialHolidayRestDayOvertimeRate,
+
+            'regularHolidayRate' =>
+                $regularHolidayRate,
+
+            'regularHolidayOvertimeRate' =>
+                $regularHolidayOvertimeRate,
+
+            'regularHolidayRestDayRate' =>
+                $regularHolidayRestDayRate,
+
+            'regularHolidayRestDayOvertimeRate' =>
+                $regularHolidayRestDayOvertimeRate,
+
+            'nightShiftDifferentialRate' =>
+                $nightShiftDifferentialRate,
 
             /*
              * Hourly peso equivalents
              */
-            'regularHourlyAmount' => $regularHourlyAmount,
-            'regularOtHourlyAmount' => $regularOtHourlyAmount,
+            'regularHourlyAmount' =>
+                $regularHourlyAmount,
 
-            'restDayHourlyAmount' => $restDayHourlyAmount,
-            'restDayOtHourlyAmount' => $restDayOtHourlyAmount,
+            'regularOtHourlyAmount' =>
+                $regularOtHourlyAmount,
 
-            'specialHolidayHourlyAmount' => $specialHolidayHourlyAmount,
-            'specialHolidayOtHourlyAmount' => $specialHolidayOtHourlyAmount,
+            'restDayHourlyAmount' =>
+                $restDayHourlyAmount,
 
-            'specialHolidayRestDayHourlyAmount' => $specialHolidayRestDayHourlyAmount,
-            'specialHolidayRestDayOtHourlyAmount' => $specialHolidayRestDayOtHourlyAmount,
+            'restDayOtHourlyAmount' =>
+                $restDayOtHourlyAmount,
 
-            'regularHolidayHourlyAmount' => $regularHolidayHourlyAmount,
-            'regularHolidayOtHourlyAmount' => $regularHolidayOtHourlyAmount,
+            'specialHolidayHourlyAmount' =>
+                $specialHolidayHourlyAmount,
 
-            'regularHolidayRestDayHourlyAmount' => $regularHolidayRestDayHourlyAmount,
-            'regularHolidayRestDayOtHourlyAmount' => $regularHolidayRestDayOtHourlyAmount,
+            'specialHolidayOtHourlyAmount' =>
+                $specialHolidayOtHourlyAmount,
 
-            'nsdHourlyAmount' => $nsdHourlyAmount,
+            'specialHolidayRestDayHourlyAmount' =>
+                $specialHolidayRestDayHourlyAmount,
+
+            'specialHolidayRestDayOtHourlyAmount' =>
+                $specialHolidayRestDayOtHourlyAmount,
+
+            'regularHolidayHourlyAmount' =>
+                $regularHolidayHourlyAmount,
+
+            'regularHolidayOtHourlyAmount' =>
+                $regularHolidayOtHourlyAmount,
+
+            'regularHolidayRestDayHourlyAmount' =>
+                $regularHolidayRestDayHourlyAmount,
+
+            'regularHolidayRestDayOtHourlyAmount' =>
+                $regularHolidayRestDayOtHourlyAmount,
+
+            'nsdHourlyAmount' =>
+                $nsdHourlyAmount,
 
             /*
              * Actual amounts
              */
-            'regularDayOvertimeAmount' => $regularDayOvertimeAmount,
-            'restDayAmount' => $restDayAmount,
-            'restDayOvertimeAmount' => $restDayOvertimeAmount,
-            'nightShiftDifferentialAmount' => $nightShiftDifferentialAmount,
+            'regularDayOvertimeAmount' =>
+                $regularDayOvertimeAmount,
+
+            'restDayAmount' =>
+                $restDayAmount,
+
+            'restDayOvertimeAmount' =>
+                $restDayOvertimeAmount,
+
+            'nightShiftDifferentialAmount' =>
+                $nightShiftDifferentialAmount,
+
+            /*
+             * OT + NSD
+             */
+            'weekdayOtNsdMinutes' =>
+                $weekdayOtNsdMinutes,
+
+            'restDayOtNsdMinutes' =>
+                $restDayOtNsdMinutes,
+
+            'totalOtNsdMinutes' =>
+                $totalOtNsdMinutes,
+
+            'weekdayOtNsdHourlyAmount' =>
+                $weekdayOtNsdHourlyAmount,
+
+            'restDayOtNsdHourlyAmount' =>
+                $restDayOtNsdHourlyAmount,
+
+            'weekdayOtNsdAmount' =>
+                $weekdayOtNsdAmount,
+
+            'restDayOtNsdAmount' =>
+                $restDayOtNsdAmount,
+
+            'totalOtNsdAmount' =>
+                $totalOtNsdAmount,
 
             /*
              * Items
              */
-            'allowanceItems' => $allowanceItems,
-            'deductionItems' => $deductionItems,
+            'allowanceItems' =>
+                $allowanceItems,
+
+            'deductionItems' =>
+                $deductionItems,
 
             /*
              * OT
              */
-            'weekdayOt' => $weekdayOt,
-            'restDayOt' => $restDayOt,
+            'weekdayOt' =>
+                $weekdayOt,
+
+            'restDayOt' =>
+                $restDayOt,
         ];
     }
 }

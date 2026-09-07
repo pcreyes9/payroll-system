@@ -4,8 +4,18 @@
          FILTER
          ================================================================ --}}
 
+         <button
+            type="button"
+            wire:click="openAddAttendanceModal"
+            class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700"
+        >
+            <x-heroicon-o-plus class="h-5 w-5" />
+            Add Attendance
+        </button>
+
     <div class="mb-6">
         {{ $this->form }}
+        
     </div>
 
 
@@ -178,19 +188,19 @@
 
                         <tr>
 
-                            <th class="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                            <th class="sticky left-0 z-20 w-[160px] whitespace-nowrap bg-gray-50 px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-800 dark:text-gray-400">
                                 Date
                             </th>
 
-                            <th class="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                            <th class="sticky left-[160px] z-20 w-[110px] whitespace-nowrap bg-gray-50 px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-800 dark:text-gray-400">
                                 Time In
                             </th>
 
-                            <th class="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                            <th class="sticky left-[270px] z-20 w-[110px] whitespace-nowrap bg-gray-50 px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-800 dark:text-gray-400">
                                 Time Out
                             </th>
 
-                            <th class="px-5 py-4 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                            <th class="sticky left-[380px] z-20 w-[100px] whitespace-nowrap bg-gray-50 px-5 py-4 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 shadow-[4px_0_6px_-2px_rgba(0,0,0,0.08)] dark:bg-gray-800 dark:text-gray-400">
                                 Hours
                             </th>
 
@@ -239,7 +249,7 @@
 
                                 {{-- DATE --}}
 
-                                <td class="whitespace-nowrap px-5 py-4">
+                                <td class="sticky left-0 z-10 w-[160px] whitespace-nowrap bg-white px-5 py-4 dark:bg-gray-900">
 
                                     <div class="font-medium text-gray-900 dark:text-white">
                                         {{ $attendance->attendance_date?->format('M d, Y') }}
@@ -254,7 +264,7 @@
 
                                 {{-- TIME IN --}}
 
-                                <td class="whitespace-nowrap px-5 py-4 text-gray-600 dark:text-gray-300">
+                                <td class="sticky left-[160px] z-10 w-[110px] whitespace-nowrap bg-white px-5 py-4 text-gray-600 dark:bg-gray-900 dark:text-gray-300">
 
                                     {{ $attendance->time_in?->format('h:i A') ?? '—' }}
 
@@ -263,7 +273,7 @@
 
                                 {{-- TIME OUT --}}
 
-                                <td class="whitespace-nowrap px-5 py-4 text-gray-600 dark:text-gray-300">
+                                <td class="sticky left-[270px] z-10 w-[110px] whitespace-nowrap bg-white px-5 py-4 text-gray-600 dark:bg-gray-900 dark:text-gray-300">
 
                                     {{ $attendance->time_out?->format('h:i A') ?? '—' }}
 
@@ -272,7 +282,7 @@
 
                                 {{-- HOURS --}}
 
-                                <td class="whitespace-nowrap px-5 py-4 text-right font-semibold text-gray-700 dark:text-gray-200">
+                                <td class="sticky left-[380px] z-10 w-[100px] whitespace-nowrap bg-white px-5 py-4 text-right font-semibold text-gray-700 shadow-[4px_0_6px_-2px_rgba(0,0,0,0.08)] dark:bg-gray-900 dark:text-gray-200">
 
                                     {{ number_format($attendance->worked_minutes / 60, 2) }}
 
@@ -1076,6 +1086,397 @@
                             </div>
 
                         @endif
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        @endteleport
+
+    @endif
+
+
+    {{-- ================================================================
+         ADD ATTENDANCE MODAL
+         ================================================================ --}}
+
+    @if ($showAddAttendanceModal)
+
+        @teleport('body')
+
+            <div
+                class="fixed inset-0 z-[99999]"
+                wire:keydown.escape="closeAddAttendanceModal"
+            >
+
+                {{-- BACKDROP --}}
+
+                <div
+                    class="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                    wire:click="closeAddAttendanceModal"
+                ></div>
+
+
+                {{-- MODAL --}}
+
+                <div class="relative flex min-h-screen items-center justify-center p-4">
+
+                    <div
+                        class="relative w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-900"
+                        wire:click.stop
+                    >
+
+                        {{-- HEADER --}}
+
+                        <div class="flex items-center justify-between border-b border-gray-200 px-6 py-5 dark:border-gray-700">
+
+                            <div>
+
+                                <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                                    Add Attendance
+                                </h2>
+
+                                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                                    Add attendance for one or more employees.
+                                </p>
+
+                            </div>
+
+
+                            <button
+                                type="button"
+                                wire:click="closeAddAttendanceModal"
+                                class="rounded-lg p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                            >
+
+                                <x-heroicon-o-x-mark class="h-5 w-5" />
+
+                            </button>
+
+                        </div>
+
+
+                        {{-- FORM BODY --}}
+
+                        <div class="max-h-[75vh] space-y-6 overflow-y-auto px-6 py-6">
+
+                            {{-- ATTENDANCE DATE --}}
+
+                            <div>
+
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                    Attendance Date
+                                </label>
+
+                                <input
+                                    type="date"
+                                    wire:model="addAttendanceData.attendance_date"
+                                    class="mt-1 block w-full rounded-xl border-gray-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                                >
+
+                                @error('addAttendanceData.attendance_date')
+                                    <p class="mt-1 text-xs text-red-600">
+                                        {{ $message }}
+                                    </p>
+                                @enderror
+
+                            </div>
+
+
+                            {{-- EMPLOYEES --}}
+
+                            <div>
+
+                                <div class="mb-3 flex items-center justify-between">
+
+                                    <div>
+
+                                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                            Employees
+                                        </label>
+
+                                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                            Select the employees who should receive this attendance date.
+                                        </p>
+
+                                    </div>
+
+
+                                    {{-- SELECT ALL --}}
+
+                                    <label class="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+
+                                        <input
+                                            type="checkbox"
+                                            wire:model.live="selectAllEmployees"
+                                            wire:change="toggleAllEmployees"
+                                            class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                        >
+
+                                        Select All
+
+                                    </label>
+
+                                </div>
+
+
+                                {{-- EMPLOYEE CHECKLIST --}}
+
+                                <div class="max-h-64 overflow-y-auto rounded-xl border border-gray-200 dark:border-gray-700">
+
+                                    @forelse ($this->activeEmployees as $employee)
+
+                                        <label
+                                            class="flex cursor-pointer items-center gap-3 border-b border-gray-200 bg-white px-4 py-3 last:border-b-0 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:hover:bg-gray-800"
+                                        >
+
+                                            <input
+                                                type="checkbox"
+                                                value="{{ $employee->id }}"
+                                                wire:model.live="addAttendanceData.employee_ids"
+                                                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                            >
+
+
+                                            <div class="min-w-0">
+
+                                                <div class="text-sm font-medium text-gray-900 dark:text-white">
+                                                    {{ $employee->full_name }}
+                                                </div>
+
+                                                <div class="text-xs text-gray-500 dark:text-gray-400">
+                                                    {{ $employee->employee_id }}
+                                                </div>
+
+                                            </div>
+
+                                        </label>
+
+                                    @empty
+
+                                        <div class="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                                            No active employees found.
+                                        </div>
+
+                                    @endforelse
+
+                                </div>
+
+
+                                <div class="mt-2 flex items-center justify-between">
+
+                                    <p class="text-xs text-gray-500 dark:text-gray-400">
+                                        {{ count($addAttendanceData['employee_ids'] ?? []) }}
+                                        employee(s) selected
+                                    </p>
+
+                                    @error('addAttendanceData.employee_ids')
+                                        <p class="text-xs text-red-600">
+                                            {{ $message }}
+                                        </p>
+                                    @enderror
+
+                                </div>
+
+
+                                @error('addAttendanceData.employee_ids.*')
+                                    <p class="mt-1 text-xs text-red-600">
+                                        {{ $message }}
+                                    </p>
+                                @enderror
+
+                            </div>
+
+
+                            {{-- STATUS --}}
+
+                            <div>
+
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                    Status
+                                </label>
+
+                                <select
+                                    wire:model.live="addAttendanceData.status"
+                                    class="mt-1 block w-full rounded-xl border-gray-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                                >
+
+                                    <option value="present">
+                                        Present
+                                    </option>
+
+                                    <option value="absent">
+                                        Absent
+                                    </option>
+
+                                    <option value="vl">
+                                        VL – Vacation Leave
+                                    </option>
+
+                                    <option value="sl">
+                                        SL – Sick Leave
+                                    </option>
+
+                                    <option value="half_day">
+                                        Half Day
+                                    </option>
+
+                                    <option value="rest_day">
+                                        Rest Day
+                                    </option>
+
+                                    <option value="regular_holiday">
+                                        Regular Holiday
+                                    </option>
+
+                                    <option value="special_non_working_holiday">
+                                        Special Non-Working Holiday
+                                    </option>
+
+                                    <option value="emergency_leave">
+                                        Emergency Leave
+                                    </option>
+
+                                    <option value="lwop">
+                                        LWOP – Leave Without Pay
+                                    </option>
+
+                                </select>
+
+                                @error('addAttendanceData.status')
+                                    <p class="mt-1 text-xs text-red-600">
+                                        {{ $message }}
+                                    </p>
+                                @enderror
+
+                            </div>
+
+
+                            {{-- TIME IN / TIME OUT --}}
+
+                            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+
+                                <div>
+
+                                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                        Time In
+                                    </label>
+
+                                    <input
+                                        type="time"
+                                        wire:model="addAttendanceData.time_in"
+                                        class="mt-1 block w-full rounded-xl border-gray-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                                    >
+
+                                    @error('addAttendanceData.time_in')
+                                        <p class="mt-1 text-xs text-red-600">
+                                            {{ $message }}
+                                        </p>
+                                    @enderror
+
+                                </div>
+
+
+                                <div>
+
+                                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                        Time Out
+                                    </label>
+
+                                    <input
+                                        type="time"
+                                        wire:model="addAttendanceData.time_out"
+                                        class="mt-1 block w-full rounded-xl border-gray-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                                    >
+
+                                    @error('addAttendanceData.time_out')
+                                        <p class="mt-1 text-xs text-red-600">
+                                            {{ $message }}
+                                        </p>
+                                    @enderror
+
+                                </div>
+
+                            </div>
+
+
+                            {{-- INFORMATION --}}
+
+                            <div class="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-500/10">
+
+                                <p class="text-xs leading-relaxed text-blue-700 dark:text-blue-300">
+                                    Attendance will be automatically calculated using your current attendance rules.
+                                    Existing attendance for the selected date will be skipped.
+                                </p>
+
+                            </div>
+
+
+                            {{-- REMARKS --}}
+
+                            <div>
+
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                    Remarks
+                                </label>
+
+                                <textarea
+                                    rows="3"
+                                    wire:model="addAttendanceData.remarks"
+                                    placeholder="Optional remarks..."
+                                    class="mt-1 block w-full rounded-xl border-gray-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                                ></textarea>
+
+                                @error('addAttendanceData.remarks')
+                                    <p class="mt-1 text-xs text-red-600">
+                                        {{ $message }}
+                                    </p>
+                                @enderror
+
+                            </div>
+
+                        </div>
+
+
+                        {{-- FOOTER --}}
+
+                        <div class="flex items-center justify-end gap-2 border-t border-gray-200 bg-gray-50 px-6 py-4 dark:border-gray-700 dark:bg-gray-800/50">
+
+                            <button
+                                type="button"
+                                wire:click="closeAddAttendanceModal"
+                                class="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
+                            >
+                                Cancel
+                            </button>
+
+
+                            <button
+                                type="button"
+                                wire:click="addAttendance"
+                                wire:loading.attr="disabled"
+                                class="rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-primary-700 disabled:opacity-50"
+                            >
+
+                                <span
+                                    wire:loading.remove
+                                    wire:target="addAttendance"
+                                >
+                                    Add Attendance
+                                </span>
+
+                                <span
+                                    wire:loading
+                                    wire:target="addAttendance"
+                                >
+                                    Adding...
+                                </span>
+
+                            </button>
+
+                        </div>
 
                     </div>
 

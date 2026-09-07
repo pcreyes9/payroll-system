@@ -28,6 +28,31 @@ class AttendanceCalculator
 
         /*
          * -------------------------------------------------
+         * PRESERVE MANUALLY SELECTED STATUS
+         * -------------------------------------------------
+         *
+         * These statuses must not be changed to Present
+         * or Rest Day simply because Time In / Time Out
+         * exist.
+         */
+
+        $originalStatus = $attendance->status;
+
+        $protectedStatuses = [
+            'half_day',
+            'vl',
+            'sl',
+            'sil',
+            'regular_holiday',
+            'special_non_working_holiday',
+            'emergency_leave',
+            'lwop',
+            'unpaid_leave',
+            'holiday',
+        ];
+
+        /*
+         * -------------------------------------------------
          * ACTUAL TIME IN / OUT
          * -------------------------------------------------
          */
@@ -44,14 +69,6 @@ class AttendanceCalculator
          * -------------------------------------------------
          * OVERNIGHT ATTENDANCE
          * -------------------------------------------------
-         *
-         * Example:
-         *
-         * 14:00 -> 00:00
-         *
-         * becomes:
-         *
-         * Sep 06 14:00 -> Sep 07 00:00
          */
 
         if ($timeOut->lessThanOrEqualTo($timeIn)) {
@@ -88,9 +105,6 @@ class AttendanceCalculator
             [1, 2, 3, 4, 5]
         );
 
-        /*
-         * Make sure workdays is always an array.
-         */
         if (! is_array($workdays)) {
             $workdays = [1, 2, 3, 4, 5];
         }
@@ -135,14 +149,6 @@ class AttendanceCalculator
          * -------------------------------------------------
          * DETERMINE WORKING DAY
          * -------------------------------------------------
-         *
-         * 1 = Monday
-         * 2 = Tuesday
-         * 3 = Wednesday
-         * 4 = Thursday
-         * 5 = Friday
-         * 6 = Saturday
-         * 7 = Sunday
          */
 
         $dayOfWeek = $attendance
@@ -174,9 +180,14 @@ class AttendanceCalculator
          * LATE
          * -------------------------------------------------
          *
-         * Grace period only determines when lateness starts.
+         * IMPORTANT:
          *
-         * Example:
+         * Half Day does NOT receive late minutes.
+         *
+         * VL / SL / SIL / Holiday / LWOP also do not
+         * receive late minutes.
+         *
+         * For normal Present attendance:
          *
          * Official = 09:00
          * Grace    = 15 minutes
@@ -189,16 +200,24 @@ class AttendanceCalculator
 
         $lateMinutes = 0;
 
-        if ($isWorkingDay) {
-
+        if (
+            $isWorkingDay
+            && ! in_array(
+                $originalStatus,
+                $protectedStatuses,
+                true
+            )
+        ) {
             $lateThreshold = $officialTimeInCarbon
                 ->copy()
                 ->addMinutes($gracePeriod);
 
             if ($timeIn->greaterThan($lateThreshold)) {
 
-                $lateMinutes = $officialTimeInCarbon
-                    ->diffInMinutes($timeIn);
+                $lateMinutes =
+                    $officialTimeInCarbon->diffInMinutes(
+                        $timeIn
+                    );
             }
         }
 
@@ -208,11 +227,6 @@ class AttendanceCalculator
          * -------------------------------------------------
          *
          * Break/lunch is INCLUDED.
-         *
-         * Example:
-         *
-         * 09:00 -> 17:00
-         * = 480 minutes
          */
 
         $workedMinutes = max(
@@ -224,20 +238,6 @@ class AttendanceCalculator
          * -------------------------------------------------
          * REGULAR MINUTES
          * -------------------------------------------------
-         *
-         * For a normal working day:
-         *
-         * Regular work is from actual Time In
-         * up to official Time Out.
-         *
-         * Early arrival does NOT create regular
-         * worked minutes before official Time In.
-         *
-         * Example:
-         *
-         * 08:30 -> 17:00
-         *
-         * Regular = 480 minutes
          */
 
         $regularMinutes = 0;
@@ -246,21 +246,36 @@ class AttendanceCalculator
 
             $regularStart = $timeIn->copy();
 
-            if ($regularStart->lessThan($officialTimeInCarbon)) {
-                $regularStart = $officialTimeInCarbon->copy();
+            if (
+                $regularStart->lessThan(
+                    $officialTimeInCarbon
+                )
+            ) {
+                $regularStart =
+                    $officialTimeInCarbon->copy();
             }
 
             $regularEnd = $timeOut->copy();
 
-            if ($regularEnd->greaterThan($officialTimeOutCarbon)) {
-                $regularEnd = $officialTimeOutCarbon->copy();
+            if (
+                $regularEnd->greaterThan(
+                    $officialTimeOutCarbon
+                )
+            ) {
+                $regularEnd =
+                    $officialTimeOutCarbon->copy();
             }
 
-            if ($regularEnd->greaterThan($regularStart)) {
+            if (
+                $regularEnd->greaterThan(
+                    $regularStart
+                )
+            ) {
 
-                $regularMinutes = $regularStart->diffInMinutes(
-                    $regularEnd
-                );
+                $regularMinutes =
+                    $regularStart->diffInMinutes(
+                        $regularEnd
+                    );
             }
         }
 
@@ -269,30 +284,34 @@ class AttendanceCalculator
          * UNDERTIME
          * -------------------------------------------------
          *
-         * Only regular working days.
+         * Half Day / Leave records should not be treated
+         * as ordinary undertime.
          */
 
         $undertimeMinutes = 0;
 
         if (
             $isWorkingDay
-            && $timeOut->lessThan($officialTimeOutCarbon)
+            && ! in_array(
+                $originalStatus,
+                $protectedStatuses,
+                true
+            )
+            && $timeOut->lessThan(
+                $officialTimeOutCarbon
+            )
         ) {
 
-            $undertimeMinutes = $timeOut->diffInMinutes(
-                $officialTimeOutCarbon
-            );
+            $undertimeMinutes =
+                $timeOut->diffInMinutes(
+                    $officialTimeOutCarbon
+                );
         }
 
         /*
          * -------------------------------------------------
          * REST DAY MINUTES
          * -------------------------------------------------
-         *
-         * First 8 hours are rest-day work.
-         *
-         * Anything beyond 8 hours may become
-         * rest-day OT.
          */
 
         $restDayMinutes = 0;
@@ -303,34 +322,71 @@ class AttendanceCalculator
          * DETECTED OVERTIME
          * -------------------------------------------------
          *
-         * This is NOT automatically approved.
-         *
-         * Normal working day:
-         *
-         * OT = time after official Time Out.
-         *
-         * Rest day:
-         *
-         * OT = work beyond 8 hours.
+         * Leave / Half Day / Holiday records are not
+         * automatically treated as ordinary working-day OT.
          */
 
         $detectedOvertimeMinutes = 0;
 
-        if ($isWorkingDay) {
+        if (
+            $isWorkingDay
+            && ! in_array(
+                $originalStatus,
+                [
+                    'half_day',
+                    'vl',
+                    'sl',
+                    'sil',
+                    'regular_holiday',
+                    'special_non_working_holiday',
+                    'emergency_leave',
+                    'lwop',
+                    'unpaid_leave',
+                    'holiday',
+                ],
+                true
+            )
+        ) {
 
             if (
                 $overtimeEnabled
-                && $timeOut->greaterThan($officialTimeOutCarbon)
+                && $timeOut->greaterThan(
+                    $officialTimeOutCarbon
+                )
             ) {
 
                 $detectedOvertimeMinutes =
-                    $officialTimeOutCarbon->diffInMinutes($timeOut);
+                    $officialTimeOutCarbon->diffInMinutes(
+                        $timeOut
+                    );
             }
 
-        } else {
+        } elseif (
+            ! $isWorkingDay
+            && ! in_array(
+                $originalStatus,
+                [
+                    'vl',
+                    'sl',
+                    'sil',
+                    'regular_holiday',
+                    'special_non_working_holiday',
+                    'emergency_leave',
+                    'lwop',
+                    'unpaid_leave',
+                    'holiday',
+                ],
+                true
+            )
+        ) {
 
             /*
-             * Rest day.
+             * -------------------------------------------------
+             * REST DAY
+             * -------------------------------------------------
+             *
+             * First 8 hours = rest-day work.
+             * Beyond 8 hours = rest-day OT.
              */
 
             $restDayMinutes = min(
@@ -345,7 +401,8 @@ class AttendanceCalculator
 
                 if (
                     $overtimeEnabled
-                    && $potentialRestDayOvertime >= $minimumOvertimeMinutes
+                    && $potentialRestDayOvertime >=
+                        $minimumOvertimeMinutes
                 ) {
 
                     $restDayOvertimeMinutes =
@@ -361,24 +418,13 @@ class AttendanceCalculator
          * -------------------------------------------------
          * MINIMUM OT THRESHOLD
          * -------------------------------------------------
-         *
-         * IMPORTANT:
-         *
-         * This is a threshold, not rounding.
-         *
-         * Minimum OT = 30
-         *
-         * 17:15 = 0
-         * 17:29 = 0
-         * 17:30 = 30
-         * 17:45 = 45
-         * 18:00 = 60
          */
 
         if (
             $isWorkingDay
             && $detectedOvertimeMinutes > 0
-            && $detectedOvertimeMinutes < $minimumOvertimeMinutes
+            && $detectedOvertimeMinutes <
+                $minimumOvertimeMinutes
         ) {
 
             $detectedOvertimeMinutes = 0;
@@ -391,38 +437,46 @@ class AttendanceCalculator
          *
          * NSD is overlapping time.
          *
-         * It does NOT increase worked minutes.
-         *
-         * Example:
-         *
-         * 14:00 -> 00:00
-         *
-         * Worked = 600 minutes
-         * NSD    = 120 minutes
-         *
-         * NSD overlaps with OT when applicable.
+         * It does not increase worked minutes.
          */
 
         $nightShiftMinutes = 0;
 
         if ($nightShiftEnabled) {
 
-            $nightShiftMinutes = $this->calculateNightShiftMinutes(
-                $timeIn,
-                $timeOut,
-                $date,
-                $nightShiftStart,
-                $nightShiftEnd
-            );
+            $nightShiftMinutes =
+                $this->calculateNightShiftMinutes(
+                    $timeIn,
+                    $timeOut,
+                    $date,
+                    $nightShiftStart,
+                    $nightShiftEnd
+                );
         }
 
         /*
          * -------------------------------------------------
          * STATUS
          * -------------------------------------------------
+         *
+         * Preserve manually selected statuses.
+         *
+         * Only automatically determine Present,
+         * Absent, or Rest Day when the original status
+         * is not a protected/manual status.
          */
 
-        if ($workedMinutes <= 0) {
+        if (
+            in_array(
+                $originalStatus,
+                $protectedStatuses,
+                true
+            )
+        ) {
+
+            $status = $originalStatus;
+
+        } elseif ($workedMinutes <= 0) {
 
             $status = 'absent';
 
@@ -439,16 +493,6 @@ class AttendanceCalculator
          * -------------------------------------------------
          * OT APPROVAL STATE
          * -------------------------------------------------
-         *
-         * We preserve an existing approval ONLY when
-         * the detected OT amount has not changed.
-         *
-         * If the calculated OT changes:
-         *
-         * approved -> pending
-         *
-         * This prevents an old approval from silently
-         * approving a new OT amount.
          */
 
         $previousDetectedOt = (int) (
@@ -463,13 +507,19 @@ class AttendanceCalculator
             $attendance->overtime_status ?? 'none';
 
         $detectedOtChanged =
-            $previousDetectedOt !== $detectedOvertimeMinutes;
+            $previousDetectedOt !==
+            $detectedOvertimeMinutes;
 
-        $approvedOvertimeMinutes = $previousApprovedOt;
-        $overtimeStatus = $previousStatus;
+        $approvedOvertimeMinutes =
+            $previousApprovedOt;
+
+        $overtimeStatus =
+            $previousStatus;
 
         /*
-         * No detected OT.
+         * -------------------------------------------------
+         * NO DETECTED OT
+         * -------------------------------------------------
          */
 
         if ($detectedOvertimeMinutes <= 0) {
@@ -478,7 +528,9 @@ class AttendanceCalculator
             $overtimeStatus = 'none';
 
         /*
-         * New or changed OT.
+         * -------------------------------------------------
+         * NEW / CHANGED OT
+         * -------------------------------------------------
          */
 
         } elseif ($detectedOtChanged) {
@@ -487,13 +539,19 @@ class AttendanceCalculator
             $overtimeStatus = 'pending';
 
         /*
-         * Existing OT with no decision yet.
+         * -------------------------------------------------
+         * EXISTING OT
+         * -------------------------------------------------
          */
 
         } elseif (
             ! in_array(
                 $overtimeStatus,
-                ['approved', 'rejected', 'pending'],
+                [
+                    'approved',
+                    'rejected',
+                    'pending',
+                ],
                 true
             )
         ) {
@@ -507,13 +565,19 @@ class AttendanceCalculator
          */
 
         $approvedOvertimeMinutes = min(
-            max(0, $approvedOvertimeMinutes),
-            max(0, $detectedOvertimeMinutes)
+            max(
+                0,
+                $approvedOvertimeMinutes
+            ),
+            max(
+                0,
+                $detectedOvertimeMinutes
+            )
         );
 
         /*
-         * If status is approved but approved amount
-         * somehow became zero, treat it as rejected.
+         * Approved status with zero approved minutes
+         * is invalid.
          */
 
         if (
@@ -526,14 +590,8 @@ class AttendanceCalculator
 
         /*
          * -------------------------------------------------
-         * LEGACY / COMPATIBILITY OT FIELD
+         * PAYROLL-COMPATIBLE OT
          * -------------------------------------------------
-         *
-         * overtime_minutes represents the OT that is
-         * actually usable for payroll.
-         *
-         * Therefore it follows APPROVED OT,
-         * not detected OT.
          */
 
         $usableOvertimeMinutes =
@@ -549,62 +607,73 @@ class AttendanceCalculator
 
         $attendance->update([
 
-            'worked_minutes' => $workedMinutes,
+            'worked_minutes' =>
+                $workedMinutes,
 
-            'regular_minutes' => max(
-                0,
-                $regularMinutes
-            ),
+            'regular_minutes' =>
+                max(
+                    0,
+                    $regularMinutes
+                ),
 
-            'rest_day_minutes' => max(
-                0,
-                $restDayMinutes
-            ),
+            'rest_day_minutes' =>
+                max(
+                    0,
+                    $restDayMinutes
+                ),
 
-            'rest_day_overtime_minutes' => max(
-                0,
-                $restDayOvertimeMinutes
-            ),
+            'rest_day_overtime_minutes' =>
+                max(
+                    0,
+                    $restDayOvertimeMinutes
+                ),
 
-            'night_shift_minutes' => max(
-                0,
-                $nightShiftMinutes
-            ),
-
-            'late_minutes' => max(
-                0,
-                $lateMinutes
-            ),
-
-            'undertime_minutes' => max(
-                0,
-                $undertimeMinutes
-            ),
+            'night_shift_minutes' =>
+                max(
+                    0,
+                    $nightShiftMinutes
+                ),
 
             /*
-             * Detected OT is separate from approved OT.
+             * Half Day / VL / SL will always have
+             * zero late minutes.
              */
-            'detected_overtime_minutes' => max(
-                0,
-                $detectedOvertimeMinutes
-            ),
 
-            'approved_overtime_minutes' => max(
-                0,
-                $approvedOvertimeMinutes
-            ),
+            'late_minutes' =>
+                max(
+                    0,
+                    $lateMinutes
+                ),
 
-            'overtime_status' => $overtimeStatus,
+            'undertime_minutes' =>
+                max(
+                    0,
+                    $undertimeMinutes
+                ),
 
-            /*
-             * Payroll-compatible OT.
-             */
-            'overtime_minutes' => max(
-                0,
-                $usableOvertimeMinutes
-            ),
+            'detected_overtime_minutes' =>
+                max(
+                    0,
+                    $detectedOvertimeMinutes
+                ),
 
-            'status' => $status,
+            'approved_overtime_minutes' =>
+                max(
+                    0,
+                    $approvedOvertimeMinutes
+                ),
+
+            'overtime_status' =>
+                $overtimeStatus,
+
+            'overtime_minutes' =>
+                max(
+                    0,
+                    $usableOvertimeMinutes
+                ),
+
+            'status' =>
+                $status,
         ]);
 
         return $attendance->fresh();
@@ -613,11 +682,9 @@ class AttendanceCalculator
     /**
      * Calculate Night Shift Differential minutes.
      *
-     * The default NSD period is:
+     * Default:
      *
-     * 10:00 PM -> 6:00 AM
-     *
-     * The period crosses midnight.
+     * 22:00 -> 06:00
      */
     private function calculateNightShiftMinutes(
         Carbon $timeIn,
@@ -637,54 +704,53 @@ class AttendanceCalculator
 
         /*
          * NSD crosses midnight.
-         *
-         * Example:
-         *
-         * 22:00 -> 06:00
          */
 
-        if ($nightEnd->lessThanOrEqualTo($nightStart)) {
+        if (
+            $nightEnd->lessThanOrEqualTo(
+                $nightStart
+            )
+        ) {
             $nightEnd->addDay();
         }
 
-        /*
-         * We need to check the NSD window on the
-         * attendance date and the following date.
-         *
-         * This handles overnight attendance correctly.
-         */
-
         $totalNightMinutes = 0;
 
-        for ($dayOffset = -1; $dayOffset <= 1; $dayOffset++) {
+        /*
+         * Check previous, current, and next NSD windows.
+         */
 
-            $windowStart = $nightStart
-                ->copy()
-                ->addDays($dayOffset);
+        for (
+            $dayOffset = -1;
+            $dayOffset <= 1;
+            $dayOffset++
+        ) {
 
-            $windowEnd = $nightEnd
-                ->copy()
-                ->addDays($dayOffset);
+            $windowStart =
+                $nightStart
+                    ->copy()
+                    ->addDays($dayOffset);
 
-            /*
-             * Find overlap between:
-             *
-             * Attendance:
-             * timeIn -> timeOut
-             *
-             * NSD:
-             * windowStart -> windowEnd
-             */
+            $windowEnd =
+                $nightEnd
+                    ->copy()
+                    ->addDays($dayOffset);
 
-            $overlapStart = $timeIn->greaterThan($windowStart)
-                ? $timeIn
-                : $windowStart;
+            $overlapStart =
+                $timeIn->greaterThan($windowStart)
+                    ? $timeIn
+                    : $windowStart;
 
-            $overlapEnd = $timeOut->lessThan($windowEnd)
-                ? $timeOut
-                : $windowEnd;
+            $overlapEnd =
+                $timeOut->lessThan($windowEnd)
+                    ? $timeOut
+                    : $windowEnd;
 
-            if ($overlapEnd->greaterThan($overlapStart)) {
+            if (
+                $overlapEnd->greaterThan(
+                    $overlapStart
+                )
+            ) {
 
                 $totalNightMinutes +=
                     $overlapStart->diffInMinutes(

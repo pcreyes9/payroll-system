@@ -16,7 +16,9 @@ class AllowanceForm
         return $schema
             ->components([
                 Section::make('Allowance Information')
-                    ->description('Define the allowance and how it will be calculated.')
+                    ->description(
+                        'Define the allowance and how it will be calculated.'
+                    )
                     ->schema([
                         TextInput::make('code')
                             ->label('Code')
@@ -56,7 +58,9 @@ class AllowanceForm
                             ])
                             ->required()
                             ->default('monthly')
-                            ->helperText('Monthly allowances are split across both semi-monthly payroll runs.'),
+                            ->helperText(
+                                'Monthly allowances are split across both semi-monthly payroll runs.'
+                            ),
 
                         TextInput::make('default_amount')
                             ->label('Default Amount')
@@ -64,11 +68,16 @@ class AllowanceForm
                             ->prefix('₱')
                             ->minValue(0)
                             ->required()
-                            ->default(0),
+                            ->default(0)
+                            ->helperText(
+                                'Default amount used for fixed, per-day, or per-hour allowances.'
+                            ),
 
                         Toggle::make('is_taxable')
                             ->label('Taxable')
-                            ->helperText('Include this allowance as taxable income.')
+                            ->helperText(
+                                'Include this allowance as taxable income.'
+                            )
                             ->default(false),
 
                         Toggle::make('is_active')

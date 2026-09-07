@@ -26,6 +26,8 @@ class DatabaseSeeder extends Seeder
             SettingsSeeder::class,
             AttendanceRecordSeeder::class,
             PayrollSettingsSeeder::class,
+            SssContributionBracketSeeder::class,
+            PhilhealthRateSeeder::class,
 
         ]);
     }

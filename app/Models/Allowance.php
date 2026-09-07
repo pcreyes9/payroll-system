@@ -14,12 +14,14 @@ class Allowance extends Model
         'calculation_type',
         'frequency',
         'default_amount',
+        'percentage',
         'is_taxable',
         'is_active',
     ];
 
     protected $casts = [
         'default_amount' => 'decimal:2',
+        'percentage' => 'decimal:2',
         'is_taxable' => 'boolean',
         'is_active' => 'boolean',
     ];

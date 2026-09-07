@@ -5,6 +5,7 @@ namespace App\Services\Payroll;
 use App\Models\AttendanceRecord;
 use App\Models\Payroll;
 use App\Models\Setting;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class PayrollCalculator
@@ -19,7 +20,7 @@ class PayrollCalculator
 
             /*
              * -------------------------------------------------
-             * LOAD REQUIRED RELATIONSHIPS
+             * LOAD RELATIONSHIPS
              * -------------------------------------------------
              */
 
@@ -34,7 +35,7 @@ class PayrollCalculator
 
             /*
              * -------------------------------------------------
-             * CLEAR PREVIOUS PAYROLL ITEMS
+             * CLEAR PREVIOUS ITEMS
              * -------------------------------------------------
              */
 
@@ -67,86 +68,6 @@ class PayrollCalculator
             );
 
             /*
-             * Create Basic Pay payroll item
-             */
-
-            $payroll->items()->create([
-                'item_type' => 'earning',
-                'code' => 'BASIC',
-                'description' => 'Basic Pay',
-                'quantity' => 1,
-                'rate' => $basicPay,
-                'amount' => $basicPay,
-                'sort_order' => 10,
-            ]);
-
-            /*
-             * -------------------------------------------------
-             * ALLOWANCES
-             * -------------------------------------------------
-             */
-
-            $allowancesTotal = 0;
-            $allowanceSortOrder = 20;
-
-            foreach ($employee->allowances as $employeeAllowance) {
-
-                // Must be active
-                if (! $employeeAllowance->is_active) {
-                    continue;
-                }
-
-                // Must have started by payroll period end
-                if (
-                    $employeeAllowance->effective_date &&
-                    $employeeAllowance->effective_date > $period->period_end
-                ) {
-                    continue;
-                }
-
-                // Must not have ended before payroll period
-                if (
-                    $employeeAllowance->end_date &&
-                    $employeeAllowance->end_date < $period->period_start
-                ) {
-                    continue;
-                }
-
-                $amount = (float) $employeeAllowance->amount;
-
-                if ($amount <= 0) {
-                    continue;
-                }
-
-                $amount = $this->calculateAllowanceAmount(
-                    $amount,
-                    $employeeAllowance->allowance?->frequency,
-                    $employee->pay_frequency
-                );
-
-                $allowancesTotal += $amount;
-
-                $payroll->items()->create([
-                    'item_type' => 'earning',
-                    'code' => 'ALLOWANCE',
-
-                    'description' =>
-                        $employeeAllowance->allowance?->name
-                        ?? 'Allowance',
-
-                    'reference_id' => $employeeAllowance->allowance_id,
-
-                    'quantity' => 1,
-                    'rate' => $amount,
-                    'amount' => $amount,
-
-                    'sort_order' => $allowanceSortOrder,
-                ]);
-
-                $allowanceSortOrder++;
-            }
-
-            /*
              * -------------------------------------------------
              * ATTENDANCE
              * -------------------------------------------------
@@ -163,19 +84,205 @@ class PayrollCalculator
 
             /*
              * -------------------------------------------------
-             * PAYROLL RATES
+             * VL / SL DEDUCTION
              * -------------------------------------------------
              *
-             * Rates are stored in the database as percentages.
+             * VL and SL reduce basic pay.
+             */
+
+            $dailyRate = $this->calculateDailyRate(
+                $basicSalary
+            );
+
+            $leaveDeduction = 0.00;
+
+            foreach ($attendanceRecords as $attendance) {
+
+                if (in_array(
+                    $attendance->status,
+                    ['vl', 'sl'],
+                    true
+                )) {
+                    $leaveDeduction += $dailyRate;
+                }
+            }
+
+            $basicPay = max(
+                0,
+                $basicPay - $leaveDeduction
+            );
+
+            /*
+             * -------------------------------------------------
+             * BASIC PAY ITEM
+             * -------------------------------------------------
+             */
+
+            $payroll->items()->create([
+                'item_type' => 'earning',
+                'code' => 'BASIC',
+                'description' => 'Basic Pay',
+                'quantity' => 1,
+                'rate' => round($basicPay, 2),
+                'amount' => round($basicPay, 2),
+                'sort_order' => 10,
+            ]);
+
+            /*
+             * -------------------------------------------------
+             * ALLOWANCES
+             * -------------------------------------------------
              *
-             * Example:
+             * IMPORTANT:
              *
-             * 125 = 125%
-             * 130 = 130%
-             * 169 = 169%
-             * 10  = 10%
+             * $allowancesTotal
+             *     = ALL allowances
              *
-             * They are converted to decimal multipliers below.
+             * $taxableAllowanceTotal
+             *     = only allowances where
+             *       allowance.is_taxable = true
+             *
+             * Non-taxable allowances still go into gross pay,
+             * but do NOT go into BIR taxable compensation.
+             */
+
+            $allowancesTotal = 0.00;
+            $taxableAllowanceTotal = 0.00;
+
+            $allowanceSortOrder = 20;
+
+            foreach ($employee->allowances as $employeeAllowance) {
+
+                if (! $employeeAllowance->is_active) {
+                    continue;
+                }
+
+                if (
+                    $employeeAllowance->effective_date
+                    && $employeeAllowance->effective_date >
+                        $period->period_end
+                ) {
+                    continue;
+                }
+
+                if (
+                    $employeeAllowance->end_date
+                    && $employeeAllowance->end_date <
+                        $period->period_start
+                ) {
+                    continue;
+                }
+
+                $allowance =
+                    $employeeAllowance->allowance;
+
+                if (! $allowance) {
+                    continue;
+                }
+
+                /*
+                 * -------------------------------------------------
+                 * CALCULATE ALLOWANCE
+                 * -------------------------------------------------
+                 */
+
+                if (
+                    $allowance->calculation_type ===
+                    'percentage_basic'
+                ) {
+
+                    /*
+                     * Employee-specific percentage.
+                     *
+                     * Example:
+                     *
+                     * ₱20,604.83 × 5%
+                     * = ₱1,030.24
+                     */
+
+                    $percentage = (float) (
+                        $employeeAllowance->percentage
+                        ?? 0
+                    );
+
+                    if ($percentage <= 0) {
+                        continue;
+                    }
+
+                    $amount =
+                        $basicSalary
+                        * ($percentage / 100);
+
+                } else {
+
+                    $amount =
+                        (float) $employeeAllowance->amount;
+                }
+
+                if ($amount <= 0) {
+                    continue;
+                }
+
+                /*
+                 * Monthly allowance on semi-monthly payroll
+                 * is divided by two.
+                 */
+
+                $amount =
+                    $this->calculateAllowanceAmount(
+                        $amount,
+                        $allowance->frequency,
+                        $employee->pay_frequency
+                    );
+
+                $amount = round(
+                    $amount,
+                    2
+                );
+
+                $allowancesTotal += $amount;
+
+                /*
+                 * ONLY TAXABLE ALLOWANCES
+                 * go into taxable compensation.
+                 */
+
+                if ((bool) $allowance->is_taxable) {
+                    $taxableAllowanceTotal += $amount;
+                }
+
+                /*
+                 * Payroll item.
+                 */
+
+                $payroll->items()->create([
+                    'item_type' => 'earning',
+                    'code' => 'ALLOWANCE',
+
+                    'description' =>
+                        $allowance->name
+                        ?? 'Allowance',
+
+                    'reference_id' =>
+                        $employeeAllowance->allowance_id,
+
+                    'quantity' => 1,
+
+                    'rate' => $amount,
+
+                    'amount' => $amount,
+
+                    'sort_order' =>
+                        $allowanceSortOrder,
+                ]);
+
+                $allowanceSortOrder++;
+            }
+
+            /*
+             * -------------------------------------------------
+             * PAYROLL RATES
+             * -------------------------------------------------
              */
 
             $regularDayRate = $this->getPayrollRate(
@@ -183,53 +290,80 @@ class PayrollCalculator
                 100
             );
 
-            $regularDayOvertimeRate = $this->getPayrollRate(
-                'regular_day_overtime_rate',
-                125
-            );
+            $regularDayOvertimeRate =
+                $this->getPayrollRate(
+                    'regular_day_overtime_rate',
+                    125
+                );
 
             $restDayRate = $this->getPayrollRate(
                 'rest_day_rate',
                 130
             );
 
-            $restDayOvertimeRate = $this->getPayrollRate(
-                'rest_day_overtime_rate',
-                169
-            );
+            $restDayOvertimeRate =
+                $this->getPayrollRate(
+                    'rest_day_overtime_rate',
+                    169
+                );
 
-            $nightShiftDifferentialRate = $this->getPayrollRate(
-                'night_shift_differential_rate',
-                10
-            );
+            $specialHolidayRate =
+                $this->getPayrollRate(
+                    'special_holiday_rate',
+                    130
+                );
+
+            $specialHolidayOvertimeRate =
+                $this->getPayrollRate(
+                    'special_holiday_overtime_rate',
+                    169
+                );
+
+            $regularHolidayRate =
+                $this->getPayrollRate(
+                    'regular_holiday_rate',
+                    200
+                );
+
+            $regularHolidayOvertimeRate =
+                $this->getPayrollRate(
+                    'regular_holiday_overtime_rate',
+                    260
+                );
+
+            $nightShiftDifferentialRate =
+                $this->getPayrollRate(
+                    'night_shift_differential_rate',
+                    10
+                );
 
             /*
              * -------------------------------------------------
-             * HOURLY RATE
+             * DAILY / HOURLY RATE
              * -------------------------------------------------
-             *
-             * 8 hours = 1 regular working day.
-             *
-             * Daily rate is derived from the monthly salary.
              */
 
-            $dailyRate = $this->calculateDailyRate(
-                $basicSalary,
-                $employee->pay_frequency
-            );
+            $dailyRate =
+                $this->calculateDailyRate(
+                    $basicSalary
+                );
 
-            $hourlyRate = $dailyRate / 8;
+            $hourlyRate =
+                $dailyRate / 8;
 
             /*
              * -------------------------------------------------
-             * ATTENDANCE PAY
+             * PREMIUM PAY
              * -------------------------------------------------
              */
 
-            $regularDayPay = 0;
-            $restDayPay = 0;
-            $overtimePay = 0;
-            $nightShiftPay = 0;
+            $regularDayPay = 0.00;
+            $restDayPay = 0.00;
+            $specialHolidayPay = 0.00;
+            $regularHolidayPay = 0.00;
+
+            $overtimePay = 0.00;
+            $nightShiftPay = 0.00;
 
             foreach ($attendanceRecords as $attendance) {
 
@@ -241,61 +375,212 @@ class PayrollCalculator
 
                 if ($attendance->status === 'rest_day') {
 
-                    /*
-                     * Regular rest-day hours
-                     *
-                     * Example:
-                     *
-                     * 8 hours × hourly rate × 130%
-                     */
-
-                    $restDayMinutes = (int) $attendance->rest_day_minutes;
+                    $restDayMinutes =
+                        (int) $attendance->rest_day_minutes;
 
                     if ($restDayMinutes > 0) {
 
-                        $restDayHours = $restDayMinutes / 60;
+                        $restDayHours =
+                            $restDayMinutes / 60;
 
-                        $amount = $restDayHours
+                        $restDayPay +=
+                            $restDayHours
                             * $hourlyRate
                             * $restDayRate;
-
-                        $restDayPay += $amount;
                     }
 
                     /*
-                     * Approved rest-day overtime
+                     * Approved rest-day OT.
                      */
 
-                    $approvedOtMinutes = (int) $attendance->approved_overtime_minutes;
+                    $approvedOtMinutes =
+                        (int) $attendance
+                            ->approved_overtime_minutes;
 
                     if (
-                        $attendance->overtime_status === 'approved'
+                        $attendance->overtime_status ===
+                            'approved'
                         && $approvedOtMinutes > 0
                     ) {
-                        $otHours = $approvedOtMinutes / 60;
 
-                        $amount = $otHours
+                        $otHours =
+                            $approvedOtMinutes / 60;
+
+                        $overtimePay +=
+                            $otHours
                             * $hourlyRate
                             * $restDayOvertimeRate;
-
-                        $overtimePay += $amount;
                     }
 
                     /*
-                     * NSD on rest day
+                     * NSD.
                      */
 
-                    $nightMinutes = (int) $attendance->night_shift_minutes;
+                    $nightMinutes =
+                        (int) $attendance
+                            ->night_shift_minutes;
 
                     if ($nightMinutes > 0) {
 
-                        $nightHours = $nightMinutes / 60;
+                        $nightHours =
+                            $nightMinutes / 60;
 
-                        $amount = $nightHours
+                        $nightShiftPay +=
+                            $nightHours
                             * $hourlyRate
                             * $nightShiftDifferentialRate;
+                    }
 
-                        $nightShiftPay += $amount;
+                    continue;
+                }
+
+                /*
+                 * -------------------------------------------------
+                 * SPECIAL NON-WORKING HOLIDAY
+                 * -------------------------------------------------
+                 */
+
+                if (
+                    $attendance->status ===
+                    'special_non_working_holiday'
+                ) {
+
+                    $workedMinutes =
+                        (int) $attendance->worked_minutes;
+
+                    $holidayMinutes =
+                        min(
+                            $workedMinutes,
+                            8 * 60
+                        );
+
+                    if ($holidayMinutes > 0) {
+
+                        $holidayHours =
+                            $holidayMinutes / 60;
+
+                        $specialHolidayPay +=
+                            $holidayHours
+                            * $hourlyRate
+                            * $specialHolidayRate;
+                    }
+
+                    /*
+                     * Approved holiday OT.
+                     */
+
+                    $approvedOtMinutes =
+                        (int) $attendance
+                            ->approved_overtime_minutes;
+
+                    if (
+                        $attendance->overtime_status ===
+                            'approved'
+                        && $approvedOtMinutes > 0
+                    ) {
+
+                        $otHours =
+                            $approvedOtMinutes / 60;
+
+                        $overtimePay +=
+                            $otHours
+                            * $hourlyRate
+                            * $specialHolidayOvertimeRate;
+                    }
+
+                    /*
+                     * NSD.
+                     */
+
+                    $nightMinutes =
+                        (int) $attendance
+                            ->night_shift_minutes;
+
+                    if ($nightMinutes > 0) {
+
+                        $nightHours =
+                            $nightMinutes / 60;
+
+                        $nightShiftPay +=
+                            $nightHours
+                            * $hourlyRate
+                            * $nightShiftDifferentialRate;
+                    }
+
+                    continue;
+                }
+
+                /*
+                 * -------------------------------------------------
+                 * REGULAR HOLIDAY
+                 * -------------------------------------------------
+                 */
+
+                if (
+                    $attendance->status ===
+                    'regular_holiday'
+                ) {
+
+                    $workedMinutes =
+                        (int) $attendance->worked_minutes;
+
+                    $holidayMinutes =
+                        min(
+                            $workedMinutes,
+                            8 * 60
+                        );
+
+                    if ($holidayMinutes > 0) {
+
+                        $holidayHours =
+                            $holidayMinutes / 60;
+
+                        $regularHolidayPay +=
+                            $holidayHours
+                            * $hourlyRate
+                            * $regularHolidayRate;
+                    }
+
+                    /*
+                     * Approved holiday OT.
+                     */
+
+                    $approvedOtMinutes =
+                        (int) $attendance
+                            ->approved_overtime_minutes;
+
+                    if (
+                        $attendance->overtime_status ===
+                            'approved'
+                        && $approvedOtMinutes > 0
+                    ) {
+
+                        $otHours =
+                            $approvedOtMinutes / 60;
+
+                        $overtimePay +=
+                            $otHours
+                            * $hourlyRate
+                            * $regularHolidayOvertimeRate;
+                    }
+
+                    /*
+                     * NSD.
+                     */
+
+                    $nightMinutes =
+                        (int) $attendance
+                            ->night_shift_minutes;
+
+                    if ($nightMinutes > 0) {
+
+                        $nightHours =
+                            $nightMinutes / 60;
+
+                        $nightShiftPay +=
+                            $nightHours
+                            * $hourlyRate
+                            * $nightShiftDifferentialRate;
                     }
 
                     continue;
@@ -310,60 +595,59 @@ class PayrollCalculator
                 if ($attendance->status === 'present') {
 
                     /*
-                     * Regular-day attendance is already included
-                     * in the employee's basic salary.
-                     *
-                     * Therefore we do not add the 100% regular
-                     * day amount again here.
+                     * Regular attendance is already included
+                     * in Basic Pay.
                      */
 
-                    $regularMinutes = (int) $attendance->regular_minutes;
-
-                    if ($regularMinutes > 0) {
-                        $regularDayPay += 0;
-                    }
+                    $approvedOtMinutes =
+                        (int) $attendance
+                            ->approved_overtime_minutes;
 
                     /*
-                     * Approved regular-day overtime
+                     * ALL approved OT is taxable.
                      */
-
-                    $approvedOtMinutes = (int) $attendance->approved_overtime_minutes;
 
                     if (
-                        $attendance->overtime_status === 'approved'
+                        $attendance->overtime_status ===
+                            'approved'
                         && $approvedOtMinutes > 0
                     ) {
-                        $otHours = $approvedOtMinutes / 60;
 
-                        $amount = $otHours
+                        $otHours =
+                            $approvedOtMinutes / 60;
+
+                        $overtimePay +=
+                            $otHours
                             * $hourlyRate
                             * $regularDayOvertimeRate;
-
-                        $overtimePay += $amount;
                     }
 
                     /*
-                     * NSD
+                     * NSD.
+                     *
+                     * NSD is also taxable.
                      */
 
-                    $nightMinutes = (int) $attendance->night_shift_minutes;
+                    $nightMinutes =
+                        (int) $attendance
+                            ->night_shift_minutes;
 
                     if ($nightMinutes > 0) {
 
-                        $nightHours = $nightMinutes / 60;
+                        $nightHours =
+                            $nightMinutes / 60;
 
-                        $amount = $nightHours
+                        $nightShiftPay +=
+                            $nightHours
                             * $hourlyRate
                             * $nightShiftDifferentialRate;
-
-                        $nightShiftPay += $amount;
                     }
                 }
             }
 
             /*
              * -------------------------------------------------
-             * CREATE REST DAY PAY ITEM
+             * PAYROLL ITEMS
              * -------------------------------------------------
              */
 
@@ -375,66 +659,108 @@ class PayrollCalculator
                     'description' => 'Rest Day Pay',
                     'quantity' => 1,
                     'rate' => $restDayRate * 100,
-                    'amount' => round($restDayPay, 2),
+                    'amount' => round(
+                        $restDayPay,
+                        2
+                    ),
                     'sort_order' => 30,
                 ]);
             }
 
-            /*
-             * -------------------------------------------------
-             * CREATE OVERTIME PAY ITEM
-             * -------------------------------------------------
-             */
+            if ($specialHolidayPay > 0) {
+
+                $payroll->items()->create([
+                    'item_type' => 'earning',
+                    'code' => 'SPECIAL_HOLIDAY',
+                    'description' =>
+                        'Special Non-Working Holiday Pay',
+                    'quantity' => 1,
+                    'rate' =>
+                        $specialHolidayRate * 100,
+                    'amount' =>
+                        round(
+                            $specialHolidayPay,
+                            2
+                        ),
+                    'sort_order' => 31,
+                ]);
+            }
+
+            if ($regularHolidayPay > 0) {
+
+                $payroll->items()->create([
+                    'item_type' => 'earning',
+                    'code' => 'REGULAR_HOLIDAY',
+                    'description' =>
+                        'Regular Holiday Pay',
+                    'quantity' => 1,
+                    'rate' =>
+                        $regularHolidayRate * 100,
+                    'amount' =>
+                        round(
+                            $regularHolidayPay,
+                            2
+                        ),
+                    'sort_order' => 32,
+                ]);
+            }
 
             if ($overtimePay > 0) {
 
                 $payroll->items()->create([
                     'item_type' => 'earning',
                     'code' => 'OVERTIME',
-                    'description' => 'Approved Overtime Pay',
+                    'description' =>
+                        'Approved Overtime Pay',
                     'quantity' => 1,
                     'rate' => 0,
-                    'amount' => round($overtimePay, 2),
+                    'amount' =>
+                        round(
+                            $overtimePay,
+                            2
+                        ),
                     'sort_order' => 40,
                 ]);
             }
-
-            /*
-             * -------------------------------------------------
-             * CREATE NSD PAY ITEM
-             * -------------------------------------------------
-             */
 
             if ($nightShiftPay > 0) {
 
                 $payroll->items()->create([
                     'item_type' => 'earning',
                     'code' => 'NSD',
-                    'description' => 'Night Shift Differential',
+                    'description' =>
+                        'Night Shift Differential',
                     'quantity' => 1,
-                    'rate' => $nightShiftDifferentialRate * 100,
-                    'amount' => round($nightShiftPay, 2),
+                    'rate' =>
+                        $nightShiftDifferentialRate * 100,
+                    'amount' =>
+                        round(
+                            $nightShiftPay,
+                            2
+                        ),
                     'sort_order' => 50,
                 ]);
             }
 
             /*
              * -------------------------------------------------
-             * TOTAL OTHER EARNINGS
+             * OTHER EARNINGS
              * -------------------------------------------------
              */
 
-            $otherEarnings = 0;
+            $otherEarnings = 0.00;
 
             /*
              * -------------------------------------------------
-             * TOTAL PREMIUM PAY
+             * PREMIUM PAY
              * -------------------------------------------------
              */
 
             $premiumPay =
                 $regularDayPay
                 + $restDayPay
+                + $specialHolidayPay
+                + $regularHolidayPay
                 + $overtimePay
                 + $nightShiftPay;
 
@@ -442,6 +768,8 @@ class PayrollCalculator
              * -------------------------------------------------
              * GROSS PAY
              * -------------------------------------------------
+             *
+             * Includes BOTH taxable and non-taxable allowances.
              */
 
             $grossPay =
@@ -452,28 +780,57 @@ class PayrollCalculator
 
             /*
              * -------------------------------------------------
+             * TAXABLE COMPENSATION
+             * -------------------------------------------------
+             *
+             * Basic Pay                    TAXABLE
+             * Taxable allowances           TAXABLE
+             * Non-taxable allowances       EXCLUDED
+             * Regular/rest/holiday pay    TAXABLE
+             * Overtime                     TAXABLE
+             * NSD                          TAXABLE
+             * Other taxable earnings       TAXABLE
+             */
+
+            $taxableGrossPay =
+                $basicPay
+                + $taxableAllowanceTotal
+                + $premiumPay
+                + $otherEarnings;
+
+            /*
+             * -------------------------------------------------
              * DEDUCTIONS
              * -------------------------------------------------
              */
 
-            $deductions = $this->deductionCalculator->calculate(
-                $payroll,
-                $employee,
-                $grossPay,
-                $period
-            );
+            $deductions =
+                $this->deductionCalculator->calculate(
+                    $payroll,
+                    $employee,
+                    $grossPay,
+                    $basicPay,
+                    $period,
+                    $taxableGrossPay
+                );
 
-            $sss = $deductions['sss'];
+            $sss =
+                $deductions['sss'];
 
-            $philhealth = $deductions['philhealth'];
+            $philhealth =
+                $deductions['philhealth'];
 
-            $pagibig = $deductions['pagibig'];
+            $pagibig =
+                $deductions['pagibig'];
 
-            $withholdingTax = $deductions['withholding_tax'];
+            $withholdingTax =
+                $deductions['withholding_tax'];
 
-            $otherDeductions = $deductions['other_deductions'];
+            $otherDeductions =
+                $deductions['other_deductions'];
 
-            $totalDeductions = $deductions['total_deductions'];
+            $totalDeductions =
+                $deductions['total_deductions'];
 
             /*
              * -------------------------------------------------
@@ -481,7 +838,9 @@ class PayrollCalculator
              * -------------------------------------------------
              */
 
-            $netPay = $grossPay - $totalDeductions;
+            $netPay =
+                $grossPay
+                - $totalDeductions;
 
             /*
              * -------------------------------------------------
@@ -490,42 +849,90 @@ class PayrollCalculator
              */
 
             $payroll->update([
-                'basic_salary' => $basicSalary,
+                'basic_salary' =>
+                    round(
+                        $basicSalary,
+                        2
+                    ),
 
-                'basic_pay' => $basicPay,
+                'basic_pay' =>
+                    round(
+                        $basicPay,
+                        2
+                    ),
 
-                'allowances' => $allowancesTotal,
+                'allowances' =>
+                    round(
+                        $allowancesTotal,
+                        2
+                    ),
 
-                'overtime_pay' => $overtimePay,
+                'overtime_pay' =>
+                    round(
+                        $overtimePay,
+                        2
+                    ),
 
-                'other_earnings' => $otherEarnings,
+                'other_earnings' =>
+                    round(
+                        $otherEarnings,
+                        2
+                    ),
 
-                'gross_pay' => $grossPay,
+                'gross_pay' =>
+                    round(
+                        $grossPay,
+                        2
+                    ),
 
-                'sss_contribution' => $sss,
+                'sss_contribution' =>
+                    round(
+                        $sss,
+                        2
+                    ),
 
-                'philhealth_contribution' => $philhealth,
+                'philhealth_contribution' =>
+                    round(
+                        $philhealth,
+                        2
+                    ),
 
-                'pagibig_contribution' => $pagibig,
+                'pagibig_contribution' =>
+                    round(
+                        $pagibig,
+                        2
+                    ),
 
-                'withholding_tax' => $withholdingTax,
+                'withholding_tax' =>
+                    round(
+                        $withholdingTax,
+                        2
+                    ),
 
-                'other_deductions' => $otherDeductions,
+                'other_deductions' =>
+                    round(
+                        $otherDeductions,
+                        2
+                    ),
 
-                'total_deductions' => $totalDeductions,
+                'total_deductions' =>
+                    round(
+                        $totalDeductions,
+                        2
+                    ),
 
-                'net_pay' => $netPay,
+                'net_pay' =>
+                    round(
+                        $netPay,
+                        2
+                    ),
 
-                'status' => Payroll::STATUS_CALCULATED,
+                'status' =>
+                    Payroll::STATUS_CALCULATED,
 
-                'calculated_at' => now(),
+                'calculated_at' =>
+                    now(),
             ]);
-
-            /*
-             * -------------------------------------------------
-             * RETURN FRESH PAYROLL
-             * -------------------------------------------------
-             */
 
             return $payroll->fresh([
                 'employee',
@@ -535,14 +942,9 @@ class PayrollCalculator
         });
     }
 
+
     /**
-     * Get a payroll percentage from the settings table.
-     *
-     * Example:
-     *
-     * 125 stored in database
-     * becomes
-     * 1.25 for calculation.
+     * Convert payroll percentage to decimal.
      */
     private function getPayrollRate(
         string $key,
@@ -557,79 +959,67 @@ class PayrollCalculator
         ) / 100;
     }
 
+
     /**
-     * Calculate basic pay according to employee pay frequency.
+     * Calculate Basic Pay.
      */
     private function calculateBasicPay(
         float $monthlySalary,
         string $frequency
     ): float {
-        return match (
-            strtolower(
-                str_replace(
-                    ['-', ' '],
-                    '_',
-                    $frequency
-                )
+        $frequency = strtolower(
+            str_replace(
+                ['-', ' '],
+                '_',
+                $frequency
             )
-        ) {
-            'monthly' => $monthlySalary,
+        );
 
-            'semi_monthly' => $monthlySalary / 2,
+        return match ($frequency) {
 
-            'weekly' => ($monthlySalary * 12) / 52,
+            'monthly' =>
+                $monthlySalary,
 
-            'bi_weekly' => ($monthlySalary * 12) / 26,
+            'semi_monthly' =>
+                $monthlySalary / 2,
 
-            'daily' => ($monthlySalary * 12) / 313,
+            'weekly' =>
+                ($monthlySalary * 12) / 52,
 
-            default => $monthlySalary / 2,
+            'bi_weekly' =>
+                ($monthlySalary * 12) / 26,
+
+            'daily' =>
+                $monthlySalary,
+
+            default =>
+                $monthlySalary / 2,
         };
     }
 
+
     /**
-     * Calculate the daily rate used for premium pay.
-     *
-     * For now, this uses the monthly salary / 26.
-     *
-     * This is appropriate for the current premium-pay
-     * calculation where one working day is treated as
-     * 8 hours.
+     * Monthly Salary × 12 ÷ 260.
      */
     private function calculateDailyRate(
-        float $monthlySalary,
-        string $frequency
+        float $monthlySalary
     ): float {
-        return match (
-            strtolower(
-                str_replace(
-                    ['-', ' '],
-                    '_',
-                    $frequency
-                )
-            )
-        ) {
-            'daily' => $monthlySalary,
-
-            default => $monthlySalary / 26,
-        };
+        return round(
+            ($monthlySalary * 12) / 260,
+            2
+        );
     }
 
+
     /**
-     * Calculate the allowance amount for the current payroll period.
-     *
-     * Allowance amounts are stored per their own defined frequency
-     * (e.g. "monthly" or "semi_monthly" on the allowance record).
-     *
-     * If the allowance is defined as "monthly" but the employee is
-     * paid semi-monthly, the stored amount is split evenly across
-     * both payroll runs. Otherwise the amount is used as-is.
+     * Calculate allowance amount according to frequency.
      */
     private function calculateAllowanceAmount(
         float $amount,
         ?string $allowanceFrequency,
         string $employeePayFrequency
     ): float {
+
         $allowanceFrequency = strtolower(
             str_replace(
                 ['-', ' '],
@@ -648,7 +1038,8 @@ class PayrollCalculator
 
         if (
             $allowanceFrequency === 'monthly'
-            && $employeePayFrequency === 'semi_monthly'
+            && $employeePayFrequency ===
+                'semi_monthly'
         ) {
             return $amount / 2;
         }

@@ -10,6 +10,7 @@ class EmployeeAllowance extends Model
     protected $fillable = [
         'employee_id',
         'allowance_id',
+        'percentage',
         'amount',
         'effective_date',
         'end_date',
@@ -17,6 +18,7 @@ class EmployeeAllowance extends Model
     ];
 
     protected $casts = [
+        'percentage' => 'decimal:2',
         'amount' => 'decimal:2',
         'effective_date' => 'date',
         'end_date' => 'date',
