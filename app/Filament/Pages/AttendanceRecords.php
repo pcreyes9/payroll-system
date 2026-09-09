@@ -312,6 +312,52 @@ class AttendanceRecords extends Page implements HasForms
 
     /*
     |--------------------------------------------------------------------------
+    | VL / SL USAGE
+    |--------------------------------------------------------------------------
+    |
+    | Leave usage is derived directly from attendance_records.status.
+    |
+    | vl          = 1.00 VL day
+    | half_day_vl = 0.50 VL day
+    | sl          = 1.00 SL day
+    | half_day_sl = 0.50 SL day
+    |
+    | No separate leave-balance table is required.
+    |--------------------------------------------------------------------------
+    */
+
+    public function getTotalVlCreditsProperty(): float
+    {
+        return round(
+            $this->attendanceRecords->sum(
+                fn (AttendanceRecord $attendance): float =>
+                    match ($attendance->status) {
+                        'vl' => 1.00,
+                        'half_day_vl' => 0.50,
+                        default => 0.00,
+                    }
+            ),
+            2
+        );
+    }
+
+    public function getTotalSlCreditsProperty(): float
+    {
+        return round(
+            $this->attendanceRecords->sum(
+                fn (AttendanceRecord $attendance): float =>
+                    match ($attendance->status) {
+                        'sl' => 1.00,
+                        'half_day_sl' => 0.50,
+                        default => 0.00,
+                    }
+            ),
+            2
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | ADD ATTENDANCE
     |--------------------------------------------------------------------------
     */
@@ -444,6 +490,8 @@ class AttendanceRecords extends Page implements HasForms
                     'vl',
                     'sl',
                     'half_day',
+                    'half_day_vl',
+                    'half_day_sl',
                     'rest_day',
                     'regular_holiday',
                     'special_non_working_holiday',
@@ -638,6 +686,8 @@ class AttendanceRecords extends Page implements HasForms
                             $status,
                             [
                                 'half_day',
+                                'half_day_vl',
+                                'half_day_sl',
                                 'regular_holiday',
                                 'special_non_working_holiday',
                                 'rest_day',
@@ -818,6 +868,8 @@ class AttendanceRecords extends Page implements HasForms
                     'vl',
                     'sl',
                     'half_day',
+                    'half_day_vl',
+                    'half_day_sl',
                     'rest_day',
                     'regular_holiday',
                     'special_non_working_holiday',
@@ -923,6 +975,8 @@ class AttendanceRecords extends Page implements HasForms
                     $status,
                     [
                         'half_day',
+                        'half_day_vl',
+                        'half_day_sl',
                         'regular_holiday',
                         'special_non_working_holiday',
                         'rest_day',
@@ -1195,6 +1249,8 @@ class AttendanceRecords extends Page implements HasForms
                     'vl',
                     'sl',
                     'half_day',
+                    'half_day_vl',
+                    'half_day_sl',
                     'rest_day',
                     'regular_holiday',
                     'special_non_working_holiday',

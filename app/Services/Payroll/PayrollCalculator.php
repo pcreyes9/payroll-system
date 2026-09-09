@@ -84,33 +84,31 @@ class PayrollCalculator
 
             /*
              * -------------------------------------------------
-             * VL / SL DEDUCTION
+             * DAILY RATE
              * -------------------------------------------------
-             *
-             * VL and SL reduce basic pay.
              */
 
             $dailyRate = $this->calculateDailyRate(
                 $basicSalary
             );
 
-            $leaveDeduction = 0.00;
-
-            foreach ($attendanceRecords as $attendance) {
-
-                if (in_array(
-                    $attendance->status,
-                    ['vl', 'sl'],
-                    true
-                )) {
-                    $leaveDeduction += $dailyRate;
-                }
-            }
-
-            $basicPay = max(
-                0,
-                $basicPay - $leaveDeduction
-            );
+            /*
+             * -------------------------------------------------
+             * VL / SL
+             * -------------------------------------------------
+             *
+             * VL and SL are paid leave and must NOT reduce
+             * the employee's Basic Pay.
+             *
+             * This applies to both full-day and half-day leave:
+             *   vl           = no deduction
+             *   sl           = no deduction
+             *   half_day_vl  = no deduction
+             *   half_day_sl  = no deduction
+             *
+             * Unpaid absences/leave are handled separately by
+             * their applicable attendance/payroll rules.
+             */
 
             /*
              * -------------------------------------------------
@@ -132,18 +130,6 @@ class PayrollCalculator
              * -------------------------------------------------
              * ALLOWANCES
              * -------------------------------------------------
-             *
-             * IMPORTANT:
-             *
-             * $allowancesTotal
-             *     = ALL allowances
-             *
-             * $taxableAllowanceTotal
-             *     = only allowances where
-             *       allowance.is_taxable = true
-             *
-             * Non-taxable allowances still go into gross pay,
-             * but do NOT go into BIR taxable compensation.
              */
 
             $allowancesTotal = 0.00;
@@ -180,25 +166,10 @@ class PayrollCalculator
                     continue;
                 }
 
-                /*
-                 * -------------------------------------------------
-                 * CALCULATE ALLOWANCE
-                 * -------------------------------------------------
-                 */
-
                 if (
                     $allowance->calculation_type ===
                     'percentage_basic'
                 ) {
-
-                    /*
-                     * Employee-specific percentage.
-                     *
-                     * Example:
-                     *
-                     * ₱20,604.83 × 5%
-                     * = ₱1,030.24
-                     */
 
                     $percentage = (float) (
                         $employeeAllowance->percentage
@@ -223,11 +194,6 @@ class PayrollCalculator
                     continue;
                 }
 
-                /*
-                 * Monthly allowance on semi-monthly payroll
-                 * is divided by two.
-                 */
-
                 $amount =
                     $this->calculateAllowanceAmount(
                         $amount,
@@ -242,18 +208,9 @@ class PayrollCalculator
 
                 $allowancesTotal += $amount;
 
-                /*
-                 * ONLY TAXABLE ALLOWANCES
-                 * go into taxable compensation.
-                 */
-
                 if ((bool) $allowance->is_taxable) {
                     $taxableAllowanceTotal += $amount;
                 }
-
-                /*
-                 * Payroll item.
-                 */
 
                 $payroll->items()->create([
                     'item_type' => 'earning',
@@ -283,12 +240,20 @@ class PayrollCalculator
              * -------------------------------------------------
              * PAYROLL RATES
              * -------------------------------------------------
+             *
+             * getPayrollRate() returns decimal values:
+             *
+             * 100% = 1.00
+             * 125% = 1.25
+             * 130% = 1.30
+             * 169% = 1.69
              */
 
-            $regularDayRate = $this->getPayrollRate(
-                'regular_day_rate',
-                100
-            );
+            $regularDayRate =
+                $this->getPayrollRate(
+                    'regular_day_rate',
+                    100
+                );
 
             $regularDayOvertimeRate =
                 $this->getPayrollRate(
@@ -296,10 +261,11 @@ class PayrollCalculator
                     125
                 );
 
-            $restDayRate = $this->getPayrollRate(
-                'rest_day_rate',
-                130
-            );
+            $restDayRate =
+                $this->getPayrollRate(
+                    'rest_day_rate',
+                    130
+                );
 
             $restDayOvertimeRate =
                 $this->getPayrollRate(
@@ -319,6 +285,18 @@ class PayrollCalculator
                     169
                 );
 
+            $specialHolidayRestDayRate =
+                $this->getPayrollRate(
+                    'special_holiday_rest_day_rate',
+                    150
+                );
+
+            $specialHolidayRestDayOvertimeRate =
+                $this->getPayrollRate(
+                    'special_holiday_rest_day_overtime_rate',
+                    195
+                );
+
             $regularHolidayRate =
                 $this->getPayrollRate(
                     'regular_holiday_rate',
@@ -331,6 +309,18 @@ class PayrollCalculator
                     260
                 );
 
+            $regularHolidayRestDayRate =
+                $this->getPayrollRate(
+                    'regular_holiday_rest_day_rate',
+                    260
+                );
+
+            $regularHolidayRestDayOvertimeRate =
+                $this->getPayrollRate(
+                    'regular_holiday_rest_day_overtime_rate',
+                    338
+                );
+
             $nightShiftDifferentialRate =
                 $this->getPayrollRate(
                     'night_shift_differential_rate',
@@ -339,17 +329,87 @@ class PayrollCalculator
 
             /*
              * -------------------------------------------------
-             * DAILY / HOURLY RATE
+             * ATTENDANCE SETTINGS
              * -------------------------------------------------
              */
 
-            $dailyRate =
-                $this->calculateDailyRate(
-                    $basicSalary
-                );
+            $workdays = Setting::getValue(
+                'attendance',
+                'workdays',
+                [
+                    'monday',
+                    'tuesday',
+                    'wednesday',
+                    'thursday',
+                    'friday',
+                ]
+            );
+
+            if (! is_array($workdays)) {
+                $workdays = [
+                    'monday',
+                    'tuesday',
+                    'wednesday',
+                    'thursday',
+                    'friday',
+                ];
+            }
+
+            $workdays = array_map(
+                fn ($day) => strtolower(trim($day)),
+                $workdays
+            );
+
+            /*
+             * -------------------------------------------------
+             * HOURLY RATE
+             * -------------------------------------------------
+             */
 
             $hourlyRate =
                 $dailyRate / 8;
+
+            /*
+             * -------------------------------------------------
+             * TARDINESS
+             * -------------------------------------------------
+             *
+             * AttendanceCalculator already calculates and
+             * stores late_minutes.
+             *
+             * Example:
+             *
+             * Official Time In = 09:00
+             * Grace Period      = 15 minutes
+             *
+             * 09:15 = 0 late
+             * 09:16 = 16 late
+             * 09:20 = 20 late
+             * 09:30 = 30 late
+             *
+             * Payroll converts the accumulated late minutes
+             * into a peso deduction.
+             *
+             * Formula:
+             *
+             * Late Minutes ÷ 60 × Hourly Rate
+             */
+
+            $totalLateMinutes = 0;
+
+            foreach ($attendanceRecords as $attendance) {
+
+                $totalLateMinutes += max(
+                    0,
+                    (int) $attendance->late_minutes
+                );
+            }
+
+            $tardinessDeduction = round(
+                ($totalLateMinutes / 60)
+                * $hourlyRate,
+                2
+            );
 
             /*
              * -------------------------------------------------
@@ -362,10 +422,61 @@ class PayrollCalculator
             $specialHolidayPay = 0.00;
             $regularHolidayPay = 0.00;
 
+            /*
+             * Overtime base pay.
+             */
+
             $overtimePay = 0.00;
+
+            /*
+             * Additional NSD premium.
+             */
+
             $nightShiftPay = 0.00;
 
+            /*
+             * -------------------------------------------------
+             * PROCESS ATTENDANCE
+             * -------------------------------------------------
+             */
+
             foreach ($attendanceRecords as $attendance) {
+
+                $workedMinutes =
+                    (int) $attendance->worked_minutes;
+
+                $approvedOtMinutes =
+                    $attendance->overtime_status === 'approved'
+                        ? (int) $attendance->approved_overtime_minutes
+                        : 0;
+
+                $nightMinutes =
+                    (int) $attendance->night_shift_minutes;
+
+                /*
+                 * -------------------------------------------------
+                 * DETERMINE REST DAY
+                 * -------------------------------------------------
+                 */
+
+                $attendanceDate =
+                    $attendance->attendance_date instanceof Carbon
+                        ? $attendance->attendance_date
+                        : Carbon::parse(
+                            $attendance->attendance_date
+                        );
+
+                $dayName =
+                    strtolower(
+                        $attendanceDate->englishDayOfWeek
+                    );
+
+                $isNormalRestDay =
+                    ! in_array(
+                        $dayName,
+                        $workdays,
+                        true
+                    );
 
                 /*
                  * -------------------------------------------------
@@ -373,10 +484,15 @@ class PayrollCalculator
                  * -------------------------------------------------
                  */
 
-                if ($attendance->status === 'rest_day') {
+                if (
+                    $attendance->status === 'rest_day'
+                ) {
 
                     $restDayMinutes =
-                        (int) $attendance->rest_day_minutes;
+                        min(
+                            (int) $attendance->rest_day_minutes,
+                            8 * 60
+                        );
 
                     if ($restDayMinutes > 0) {
 
@@ -393,15 +509,7 @@ class PayrollCalculator
                      * Approved rest-day OT.
                      */
 
-                    $approvedOtMinutes =
-                        (int) $attendance
-                            ->approved_overtime_minutes;
-
-                    if (
-                        $attendance->overtime_status ===
-                            'approved'
-                        && $approvedOtMinutes > 0
-                    ) {
+                    if ($approvedOtMinutes > 0) {
 
                         $otHours =
                             $approvedOtMinutes / 60;
@@ -413,21 +521,53 @@ class PayrollCalculator
                     }
 
                     /*
-                     * NSD.
+                     * NSD classification.
                      */
 
-                    $nightMinutes =
-                        (int) $attendance
-                            ->night_shift_minutes;
+                    $otNightMinutes =
+                        $this->calculateApprovedOtNightMinutes(
+                            $attendance,
+                            $approvedOtMinutes,
+                            8 * 60
+                        );
 
-                    if ($nightMinutes > 0) {
+                    $regularNightMinutes =
+                        max(
+                            0,
+                            $nightMinutes
+                            - $otNightMinutes
+                        );
+
+                    /*
+                     * Rest-day NSD during regular
+                     * rest-day hours.
+                     */
+
+                    if ($regularNightMinutes > 0) {
 
                         $nightHours =
-                            $nightMinutes / 60;
+                            $regularNightMinutes / 60;
 
                         $nightShiftPay +=
                             $nightHours
                             * $hourlyRate
+                            * $restDayRate
+                            * $nightShiftDifferentialRate;
+                    }
+
+                    /*
+                     * Rest-day NSD during OT.
+                     */
+
+                    if ($otNightMinutes > 0) {
+
+                        $nightHours =
+                            $otNightMinutes / 60;
+
+                        $nightShiftPay +=
+                            $nightHours
+                            * $hourlyRate
+                            * $restDayOvertimeRate
                             * $nightShiftDifferentialRate;
                     }
 
@@ -445,14 +585,38 @@ class PayrollCalculator
                     'special_non_working_holiday'
                 ) {
 
-                    $workedMinutes =
-                        (int) $attendance->worked_minutes;
+                    /*
+                     * Regular Holiday Pay:
+                     *
+                     * Pay only the ACTUAL completed hours worked,
+                     * up to a maximum of 8 hours.
+                     *
+                     * Examples:
+                     *   4:00 hours worked = 4:00 × 200%
+                     *   6:30 hours worked = 6:30 × 200%
+                     *   8:00 hours worked = 8:00 × 200%
+                     *   9:00 hours worked = 8:00 × 200%
+                     *
+                     * The hours beyond the first 8 hours are handled
+                     * separately as approved holiday overtime.
+                     */
+                    $holidayMinutes = min(
+                        max(0, $workedMinutes),
+                        8 * 60
+                    );
 
-                    $holidayMinutes =
-                        min(
-                            $workedMinutes,
-                            8 * 60
-                        );
+                    $isHolidayRestDay =
+                        $isNormalRestDay;
+
+                    $firstEightRate =
+                        $isHolidayRestDay
+                            ? $specialHolidayRestDayRate
+                            : $specialHolidayRate;
+
+                    $holidayOvertimeRate =
+                        $isHolidayRestDay
+                            ? $specialHolidayRestDayOvertimeRate
+                            : $specialHolidayOvertimeRate;
 
                     if ($holidayMinutes > 0) {
 
@@ -462,22 +626,14 @@ class PayrollCalculator
                         $specialHolidayPay +=
                             $holidayHours
                             * $hourlyRate
-                            * $specialHolidayRate;
+                            * $firstEightRate;
                     }
 
                     /*
                      * Approved holiday OT.
                      */
 
-                    $approvedOtMinutes =
-                        (int) $attendance
-                            ->approved_overtime_minutes;
-
-                    if (
-                        $attendance->overtime_status ===
-                            'approved'
-                        && $approvedOtMinutes > 0
-                    ) {
+                    if ($approvedOtMinutes > 0) {
 
                         $otHours =
                             $approvedOtMinutes / 60;
@@ -485,25 +641,56 @@ class PayrollCalculator
                         $overtimePay +=
                             $otHours
                             * $hourlyRate
-                            * $specialHolidayOvertimeRate;
+                            * $holidayOvertimeRate;
                     }
 
                     /*
-                     * NSD.
+                     * NSD classification.
                      */
 
-                    $nightMinutes =
-                        (int) $attendance
-                            ->night_shift_minutes;
+                    $otNightMinutes =
+                        $this->calculateApprovedOtNightMinutes(
+                            $attendance,
+                            $approvedOtMinutes,
+                            8 * 60
+                        );
 
-                    if ($nightMinutes > 0) {
+                    $regularNightMinutes =
+                        max(
+                            0,
+                            $nightMinutes
+                            - $otNightMinutes
+                        );
+
+                    /*
+                     * NSD during first 8 hours.
+                     */
+
+                    if ($regularNightMinutes > 0) {
 
                         $nightHours =
-                            $nightMinutes / 60;
+                            $regularNightMinutes / 60;
 
                         $nightShiftPay +=
                             $nightHours
                             * $hourlyRate
+                            * $firstEightRate
+                            * $nightShiftDifferentialRate;
+                    }
+
+                    /*
+                     * NSD during OT.
+                     */
+
+                    if ($otNightMinutes > 0) {
+
+                        $nightHours =
+                            $otNightMinutes / 60;
+
+                        $nightShiftPay +=
+                            $nightHours
+                            * $hourlyRate
+                            * $holidayOvertimeRate
                             * $nightShiftDifferentialRate;
                     }
 
@@ -514,6 +701,12 @@ class PayrollCalculator
                  * -------------------------------------------------
                  * REGULAR HOLIDAY
                  * -------------------------------------------------
+                 *
+                 * Regular Holiday Pay is based on actual completed
+                 * hours worked, capped at 8 hours.
+                 *
+                 * Example:
+                 * 4 hours worked = 4 hours × 200%, NOT 8 hours × 200%.
                  */
 
                 if (
@@ -521,14 +714,75 @@ class PayrollCalculator
                     'regular_holiday'
                 ) {
 
-                    $workedMinutes =
-                        (int) $attendance->worked_minutes;
+                    /*
+                     * Regular Holiday Pay:
+                     *
+                     * Use the ACTUAL elapsed time between Time In
+                     * and Time Out, capped at 8 hours.
+                     *
+                     * Do not depend on worked_minutes here because
+                     * a manually classified holiday record may have
+                     * a stale/zero calculated worked_minutes value.
+                     *
+                     * Examples:
+                     *   3:15 worked = 3:15 × 200%
+                     *   6:30 worked = 6:30 × 200%
+                     *   8:00 worked = 8:00 × 200%
+                     *   9:00 worked = 8:00 × 200%
+                     *
+                     * Hours beyond the first 8 hours are handled
+                     * separately as approved holiday overtime.
+                     */
 
-                    $holidayMinutes =
-                        min(
-                            $workedMinutes,
+                    $holidayMinutes = 0;
+
+                    if (
+                        $attendance->time_in
+                        && $attendance->time_out
+                    ) {
+                        $holidayTimeIn =
+                            $this->buildAttendanceDateTime(
+                                $attendance,
+                                'time_in'
+                            );
+
+                        $holidayTimeOut =
+                            $this->buildAttendanceDateTime(
+                                $attendance,
+                                'time_out'
+                            );
+
+                        if (
+                            $holidayTimeOut->lessThanOrEqualTo(
+                                $holidayTimeIn
+                            )
+                        ) {
+                            $holidayTimeOut->addDay();
+                        }
+
+                        $holidayMinutes = min(
+                            max(
+                                0,
+                                $holidayTimeIn->diffInMinutes(
+                                    $holidayTimeOut
+                                )
+                            ),
                             8 * 60
                         );
+                    }
+
+                    $isHolidayRestDay =
+                        $isNormalRestDay;
+
+                    $firstEightRate =
+                        $isHolidayRestDay
+                            ? $regularHolidayRestDayRate
+                            : $regularHolidayRate;
+
+                    $holidayOvertimeRate =
+                        $isHolidayRestDay
+                            ? $regularHolidayRestDayOvertimeRate
+                            : $regularHolidayOvertimeRate;
 
                     if ($holidayMinutes > 0) {
 
@@ -538,22 +792,14 @@ class PayrollCalculator
                         $regularHolidayPay +=
                             $holidayHours
                             * $hourlyRate
-                            * $regularHolidayRate;
+                            * $firstEightRate;
                     }
 
                     /*
                      * Approved holiday OT.
                      */
 
-                    $approvedOtMinutes =
-                        (int) $attendance
-                            ->approved_overtime_minutes;
-
-                    if (
-                        $attendance->overtime_status ===
-                            'approved'
-                        && $approvedOtMinutes > 0
-                    ) {
+                    if ($approvedOtMinutes > 0) {
 
                         $otHours =
                             $approvedOtMinutes / 60;
@@ -561,25 +807,56 @@ class PayrollCalculator
                         $overtimePay +=
                             $otHours
                             * $hourlyRate
-                            * $regularHolidayOvertimeRate;
+                            * $holidayOvertimeRate;
                     }
 
                     /*
-                     * NSD.
+                     * NSD classification.
                      */
 
-                    $nightMinutes =
-                        (int) $attendance
-                            ->night_shift_minutes;
+                    $otNightMinutes =
+                        $this->calculateApprovedOtNightMinutes(
+                            $attendance,
+                            $approvedOtMinutes,
+                            8 * 60
+                        );
 
-                    if ($nightMinutes > 0) {
+                    $regularNightMinutes =
+                        max(
+                            0,
+                            $nightMinutes
+                            - $otNightMinutes
+                        );
+
+                    /*
+                     * NSD during regular holiday hours.
+                     */
+
+                    if ($regularNightMinutes > 0) {
 
                         $nightHours =
-                            $nightMinutes / 60;
+                            $regularNightMinutes / 60;
 
                         $nightShiftPay +=
                             $nightHours
                             * $hourlyRate
+                            * $firstEightRate
+                            * $nightShiftDifferentialRate;
+                    }
+
+                    /*
+                     * NSD during holiday OT.
+                     */
+
+                    if ($otNightMinutes > 0) {
+
+                        $nightHours =
+                            $otNightMinutes / 60;
+
+                        $nightShiftPay +=
+                            $nightHours
+                            * $hourlyRate
+                            * $holidayOvertimeRate
                             * $nightShiftDifferentialRate;
                     }
 
@@ -590,28 +867,31 @@ class PayrollCalculator
                  * -------------------------------------------------
                  * REGULAR WORKING DAY
                  * -------------------------------------------------
+                 *
+                 * Includes normal attendance and half-day VL/SL.
+                 * Approved OT on these statuses is paid at the
+                 * regular weekday overtime rate.
                  */
 
-                if ($attendance->status === 'present') {
+                if (
+                    in_array(
+                        $attendance->status,
+                        [
+                            'present',
+                            'half_day',
+                            'half_day_vl',
+                            'half_day_sl',
+                        ],
+                        true
+                    )
+                ) {
 
                     /*
-                     * Regular attendance is already included
-                     * in Basic Pay.
+                     * Regular attendance is already
+                     * included in Basic Pay.
                      */
 
-                    $approvedOtMinutes =
-                        (int) $attendance
-                            ->approved_overtime_minutes;
-
-                    /*
-                     * ALL approved OT is taxable.
-                     */
-
-                    if (
-                        $attendance->overtime_status ===
-                            'approved'
-                        && $approvedOtMinutes > 0
-                    ) {
+                    if ($approvedOtMinutes > 0) {
 
                         $otHours =
                             $approvedOtMinutes / 60;
@@ -623,23 +903,64 @@ class PayrollCalculator
                     }
 
                     /*
-                     * NSD.
-                     *
-                     * NSD is also taxable.
+                     * NSD during approved OT.
                      */
 
-                    $nightMinutes =
-                        (int) $attendance
-                            ->night_shift_minutes;
+                    $otNightMinutes =
+                        $this->calculateApprovedOtNightMinutes(
+                            $attendance,
+                            $approvedOtMinutes,
+                            0
+                        );
 
-                    if ($nightMinutes > 0) {
+                    /*
+                     * NSD outside approved OT.
+                     */
+
+                    $regularNightMinutes =
+                        max(
+                            0,
+                            $nightMinutes
+                            - $otNightMinutes
+                        );
+
+                    /*
+                     * Ordinary NSD:
+                     *
+                     * 100% × 10%
+                     * = additional 10%
+                     */
+
+                    if ($regularNightMinutes > 0) {
 
                         $nightHours =
-                            $nightMinutes / 60;
+                            $regularNightMinutes / 60;
 
                         $nightShiftPay +=
                             $nightHours
                             * $hourlyRate
+                            * $regularDayRate
+                            * $nightShiftDifferentialRate;
+                    }
+
+                    /*
+                     * Ordinary-day OT + NSD:
+                     *
+                     * 125% × 10%
+                     * = additional 12.5%
+                     *
+                     * Combined = 137.5%
+                     */
+
+                    if ($otNightMinutes > 0) {
+
+                        $nightHours =
+                            $otNightMinutes / 60;
+
+                        $nightShiftPay +=
+                            $nightHours
+                            * $hourlyRate
+                            * $regularDayOvertimeRate
                             * $nightShiftDifferentialRate;
                     }
                 }
@@ -769,7 +1090,11 @@ class PayrollCalculator
              * GROSS PAY
              * -------------------------------------------------
              *
-             * Includes BOTH taxable and non-taxable allowances.
+             * IMPORTANT:
+             *
+             * Tardiness is NOT deducted from gross pay.
+             *
+             * It remains a separate deduction.
              */
 
             $grossPay =
@@ -782,14 +1107,6 @@ class PayrollCalculator
              * -------------------------------------------------
              * TAXABLE COMPENSATION
              * -------------------------------------------------
-             *
-             * Basic Pay                    TAXABLE
-             * Taxable allowances           TAXABLE
-             * Non-taxable allowances       EXCLUDED
-             * Regular/rest/holiday pay    TAXABLE
-             * Overtime                     TAXABLE
-             * NSD                          TAXABLE
-             * Other taxable earnings       TAXABLE
              */
 
             $taxableGrossPay =
@@ -800,7 +1117,7 @@ class PayrollCalculator
 
             /*
              * -------------------------------------------------
-             * DEDUCTIONS
+             * STATUTORY / EMPLOYEE DEDUCTIONS
              * -------------------------------------------------
              */
 
@@ -811,7 +1128,8 @@ class PayrollCalculator
                     $grossPay,
                     $basicPay,
                     $period,
-                    $taxableGrossPay
+                    $taxableGrossPay,
+                    $tardinessDeduction
                 );
 
             $sss =
@@ -829,8 +1147,25 @@ class PayrollCalculator
             $otherDeductions =
                 $deductions['other_deductions'];
 
+            /*
+             * Tardiness is already included in
+             * other_deductions by DeductionCalculator.
+             *
+             * It is also returned separately for reports.
+             */
+
+            /*
+             * -------------------------------------------------
+             * TOTAL DEDUCTIONS
+             * -------------------------------------------------
+             */
+
             $totalDeductions =
-                $deductions['total_deductions'];
+                $sss
+                + $philhealth
+                + $pagibig
+                + $withholdingTax
+                + $otherDeductions;
 
             /*
              * -------------------------------------------------
@@ -944,12 +1279,387 @@ class PayrollCalculator
 
 
     /**
+     * -------------------------------------------------
+     * BUILD ATTENDANCE DATETIME
+     * -------------------------------------------------
+     *
+     * IMPORTANT:
+     *
+     * TIME columns may be returned as:
+     *
+     * 05:28:00
+     *
+     * or:
+     *
+     * 2026-09-09 05:28:00
+     *
+     * This method extracts ONLY the time portion and
+     * combines it with the attendance date.
+     *
+     * This prevents:
+     *
+     * 2026-08-22 2026-09-09 05:28:00
+     */
+    private function buildAttendanceDateTime(
+        AttendanceRecord $attendance,
+        string $field
+    ): Carbon {
+
+        $attendanceDate =
+            $attendance->attendance_date instanceof Carbon
+                ? $attendance->attendance_date->format('Y-m-d')
+                : Carbon::parse(
+                    $attendance->attendance_date
+                )->format('Y-m-d');
+
+        $value =
+            $attendance->{$field};
+
+        /*
+         * Carbon / DateTime values.
+         */
+
+        if ($value instanceof Carbon) {
+
+            $time =
+                $value->format('H:i:s');
+
+        } elseif ($value instanceof \DateTimeInterface) {
+
+            $time =
+                $value->format('H:i:s');
+
+        } else {
+
+            /*
+             * String value.
+             *
+             * Extract ONLY HH:MM:SS.
+             */
+
+            $value =
+                trim((string) $value);
+
+            if (
+                preg_match(
+                    '/(?:^|\s|T)(\d{2}:\d{2}(?::\d{2})?)/',
+                    $value,
+                    $matches
+                )
+            ) {
+
+                $time =
+                    $matches[1];
+
+            } else {
+
+                /*
+                 * Last fallback.
+                 */
+
+                $time =
+                    Carbon::parse($value)
+                        ->format('H:i:s');
+            }
+
+            if (strlen($time) === 5) {
+                $time .= ':00';
+            }
+        }
+
+        return Carbon::parse(
+            $attendanceDate . ' ' . $time
+        );
+    }
+
+
+    /**
+     * Build a Carbon datetime from an attendance
+     * date and a time setting.
+     */
+    private function buildDateTimeFromTime(
+        $attendanceDate,
+        $time
+    ): Carbon {
+
+        $date =
+            $attendanceDate instanceof Carbon
+                ? $attendanceDate->format('Y-m-d')
+                : Carbon::parse(
+                    $attendanceDate
+                )->format('Y-m-d');
+
+        if ($time instanceof Carbon) {
+
+            $timeString =
+                $time->format('H:i:s');
+
+        } elseif ($time instanceof \DateTimeInterface) {
+
+            $timeString =
+                $time->format('H:i:s');
+
+        } else {
+
+            $timeString =
+                Carbon::parse(
+                    (string) $time
+                )->format('H:i:s');
+        }
+
+        return Carbon::parse(
+            $date . ' ' . $timeString
+        );
+    }
+
+
+    /**
+     * Calculate approved OT minutes that overlap
+     * with the configured NSD period.
+     */
+    private function calculateApprovedOtNightMinutes(
+        AttendanceRecord $attendance,
+        int $approvedOtMinutes,
+        int $regularMinutesBeforeOt
+    ): int {
+
+        if (
+            $approvedOtMinutes <= 0
+            || ! $attendance->time_in
+            || ! $attendance->time_out
+        ) {
+            return 0;
+        }
+
+        /*
+         * SAFE DATETIME CONSTRUCTION
+         */
+
+        $timeIn =
+            $this->buildAttendanceDateTime(
+                $attendance,
+                'time_in'
+            );
+
+        $timeOut =
+            $this->buildAttendanceDateTime(
+                $attendance,
+                'time_out'
+            );
+
+        /*
+         * Handle overnight attendance.
+         */
+
+        if (
+            $timeOut->lessThanOrEqualTo($timeIn)
+        ) {
+            $timeOut->addDay();
+        }
+
+        /*
+         * Determine OT start.
+         */
+
+        if ($regularMinutesBeforeOt > 0) {
+
+            $otStart =
+                $timeIn->copy()->addMinutes(
+                    $regularMinutesBeforeOt
+                );
+
+        } else {
+
+            /*
+             * Regular working day.
+             *
+             * OT starts at official Time Out.
+             */
+
+            $officialTimeOut =
+                Setting::getValue(
+                    'attendance',
+                    'official_time_out',
+                    '17:00'
+                );
+
+            $otStart =
+                $this->buildDateTimeFromTime(
+                    $attendance->attendance_date,
+                    $officialTimeOut
+                );
+
+            /*
+             * Handle overnight shift.
+             */
+
+            if (
+                $otStart->lessThanOrEqualTo($timeIn)
+            ) {
+                $otStart->addDay();
+            }
+        }
+
+        if (
+            $otStart->lessThan($timeIn)
+        ) {
+            $otStart =
+                $timeIn->copy();
+        }
+
+        if (
+            $timeOut->lessThanOrEqualTo($otStart)
+        ) {
+            return 0;
+        }
+
+        /*
+         * Approved OT is the final approved
+         * portion immediately before Time Out.
+         */
+
+        $approvedOtStart =
+            $timeOut->copy()->subMinutes(
+                min(
+                    $approvedOtMinutes,
+                    $otStart->diffInMinutes(
+                        $timeOut
+                    )
+                )
+            );
+
+        if (
+            $approvedOtStart->lessThan($otStart)
+        ) {
+            $approvedOtStart =
+                $otStart->copy();
+        }
+
+        return $this->calculateNightOverlapMinutes(
+            $approvedOtStart,
+            $timeOut
+        );
+    }
+
+
+    /**
+     * Calculate overlap with the configured
+     * NSD period.
+     *
+     * Default:
+     *
+     * 22:00 → 06:00
+     */
+    private function calculateNightOverlapMinutes(
+        Carbon $start,
+        Carbon $end
+    ): int {
+
+        if (
+            $end->lessThanOrEqualTo($start)
+        ) {
+            return 0;
+        }
+
+        $nightStartTime =
+            Setting::getValue(
+                'attendance',
+                'night_shift_differential_start',
+                '22:00'
+            );
+
+        $nightEndTime =
+            Setting::getValue(
+                'attendance',
+                'night_shift_differential_end',
+                '06:00'
+            );
+
+        $totalMinutes = 0;
+
+        $cursor =
+            $start
+                ->copy()
+                ->startOfDay()
+                ->subDay();
+
+        $lastDay =
+            $end
+                ->copy()
+                ->startOfDay()
+                ->addDay();
+
+        while (
+            $cursor->lessThanOrEqualTo($lastDay)
+        ) {
+
+            $nightStart =
+                $this->buildDateTimeFromTime(
+                    $cursor,
+                    $nightStartTime
+                );
+
+            $nightEnd =
+                $this->buildDateTimeFromTime(
+                    $cursor,
+                    $nightEndTime
+                );
+
+            /*
+             * Overnight NSD window.
+             */
+
+            if (
+                $nightEnd->lessThanOrEqualTo(
+                    $nightStart
+                )
+            ) {
+                $nightEnd->addDay();
+            }
+
+            $overlapStart =
+                $start->greaterThan($nightStart)
+                    ? $start
+                    : $nightStart;
+
+            $overlapEnd =
+                $end->lessThan($nightEnd)
+                    ? $end
+                    : $nightEnd;
+
+            if (
+                $overlapEnd->greaterThan(
+                    $overlapStart
+                )
+            ) {
+                $totalMinutes +=
+                    $overlapStart->diffInMinutes(
+                        $overlapEnd
+                    );
+            }
+
+            $cursor->addDay();
+        }
+
+        return (int) $totalMinutes;
+    }
+
+
+    /**
      * Convert payroll percentage to decimal.
+     *
+     * Example:
+     *
+     * 100 → 1.00
+     * 125 → 1.25
+     * 169 → 1.69
+     * 10  → 0.10
      */
     private function getPayrollRate(
         string $key,
         float $default
     ): float {
+
         return (
             (float) Setting::getValue(
                 'payroll',
@@ -967,6 +1677,7 @@ class PayrollCalculator
         float $monthlySalary,
         string $frequency
     ): float {
+
         $frequency = strtolower(
             str_replace(
                 ['-', ' '],
@@ -1004,6 +1715,7 @@ class PayrollCalculator
     private function calculateDailyRate(
         float $monthlySalary
     ): float {
+
         return round(
             ($monthlySalary * 12) / 260,
             2
@@ -1012,7 +1724,8 @@ class PayrollCalculator
 
 
     /**
-     * Calculate allowance amount according to frequency.
+     * Calculate allowance amount according
+     * to frequency.
      */
     private function calculateAllowanceAmount(
         float $amount,

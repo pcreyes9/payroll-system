@@ -469,6 +469,24 @@
                                             @break
 
 
+                                        @case('half_day_vl')
+
+                                            <span class="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-400">
+                                                Half Day VL
+                                            </span>
+
+                                            @break
+
+
+                                        @case('half_day_sl')
+
+                                            <span class="inline-flex items-center rounded-full bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700 dark:bg-purple-500/10 dark:text-purple-400">
+                                                Half Day SL
+                                            </span>
+
+                                            @break
+
+
                                         @case('half_day')
 
                                             <span class="inline-flex items-center rounded-full bg-yellow-50 px-3 py-1 text-xs font-medium text-yellow-700 dark:bg-yellow-500/10 dark:text-yellow-400">
@@ -778,6 +796,14 @@
 
                                         <option value="sl">
                                             SL – Sick Leave
+                                        </option>
+
+                                        <option value="half_day_vl">
+                                            Half Day VL – 0.5 Credit
+                                        </option>
+
+                                        <option value="half_day_sl">
+                                            Half Day SL – 0.5 Credit
                                         </option>
 
                                         <option value="half_day">
@@ -1317,6 +1343,14 @@
 
                                     <option value="sl">
                                         SL – Sick Leave
+                                    </option>
+
+                                    <option value="half_day_vl">
+                                        Half Day VL – 0.5 Credit
+                                    </option>
+
+                                    <option value="half_day_sl">
+                                        Half Day SL – 0.5 Credit
                                     </option>
 
                                     <option value="half_day">

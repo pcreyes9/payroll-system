@@ -342,6 +342,19 @@
             <div class="monitoring-card">
 
                 <div class="monitoring-label">
+                    Total Overtime Amount
+                </div>
+
+                <div class="monitoring-value">
+                    {{ $money($displayOvertimeAmount + $totalOtNsdAmount) }}
+                </div>
+
+            </div>
+
+
+            <div class="monitoring-card">
+
+                <div class="monitoring-label">
                     Rest Day Hours
                 </div>
 
@@ -436,12 +449,17 @@
                         </td>
 
                         <td class="text-right">0.00</td>
-                        <td class="text-right">0.00</td>
+
+                        <td class="text-right">
+                            {{ $formatMinutes($totalRegularHolidayMinutes) }}
+                        </td>
 
                         <td class="text-right">
                             <strong>
                                 {{ $formatMinutes(
-                                    $totalRegularMinutes + $totalRestDayMinutes
+                                    $totalRegularMinutes
+                                    + $totalRestDayMinutes
+                                    + $totalRegularHolidayMinutes
                                 ) }}
                             </strong>
                         </td>
@@ -487,12 +505,17 @@
                         </td>
 
                         <td class="text-right">
-                            <strong>₱0.00</strong>
+                            <strong>
+                                {{ $money($regularHolidayAmount) }}
+                            </strong>
                         </td>
 
                         <td class="text-right">
                             <strong>
-                                {{ $money($restDayAmount) }}
+                                {{ $money(
+                                    $restDayAmount
+                                    + $regularHolidayAmount
+                                ) }}
                             </strong>
                         </td>
                     </tr>
@@ -516,7 +539,7 @@
         </h3>
 
         <div class="payroll-section-description">
-            Approved overtime is calculated using the applicable payroll rate for each workday classification.
+            Approved overtime is shown here excluding the hours separately classified as OT + NSD below.
         </div>
 
         <div class="payroll-table-wrapper">
@@ -564,11 +587,11 @@
                         <td><strong>Hours</strong></td>
 
                         <td class="text-right">
-                            {{ $formatMinutes($weekdayOt) }}
+                            {{ $formatMinutes($weekdayOtDisplayMinutes) }}
                         </td>
 
                         <td class="text-right">
-                            {{ $formatMinutes($restDayOt) }}
+                            {{ $formatMinutes($restDayOtDisplayMinutes) }}
                         </td>
 
                         <td class="text-right">0.00</td>
@@ -576,7 +599,9 @@
 
                         <td class="text-right">
                             <strong>
-                                {{ $formatMinutes($totalApprovedOtMinutes) }}
+                                {{ $formatMinutes(
+                                    $weekdayOtDisplayMinutes + $restDayOtDisplayMinutes
+                                ) }}
                             </strong>
                         </td>
                     </tr>
@@ -607,15 +632,11 @@
                         <td><strong>Amount</strong></td>
 
                         <td class="text-right">
-                            <strong>{{ $money($regularDayOvertimeAmount) }}</strong>
+                            <strong>{{ $money($weekdayOtDisplayAmount) }}</strong>
                         </td>
 
                         <td class="text-right">
-                            <strong>{{ $money($restDayOvertimeAmount) }}</strong>
-                        </td>
-
-                        <td class="text-right">
-                            <strong>₱0.00</strong>
+                            <strong>{{ $money($restDayOtDisplayAmount) }}</strong>
                         </td>
 
                         <td class="text-right">
@@ -623,7 +644,11 @@
                         </td>
 
                         <td class="text-right">
-                            <strong>{{ $money($overtimePay) }}</strong>
+                            <strong>₱0.00</strong>
+                        </td>
+
+                        <td class="text-right">
+                            <strong>{{ $money($displayOvertimeAmount) }}</strong>
                         </td>
                     </tr>
                 </tbody>
@@ -648,7 +673,8 @@
         <div class="payroll-section-description">
             Only approved overtime hours that actually overlap with the
             night differential period are shown here.
-            These amounts are already included in Overtime and NSD above.
+            These hours are displayed separately from the OT-only summary above
+            to avoid showing the same minutes twice.
         </div>
 
         <div class="payroll-table-wrapper">
@@ -662,35 +688,47 @@
                             Description
                         </th>
 
+                        {{-- WEEKDAY OT + NSD --}}
+
                         <th class="text-right">
                             Weekday
                             <span class="table-rate-title">
                                 ({{ number_format(
-                                    $regularDayOvertimeRate
-                                    + $nightShiftDifferentialRate,
+                                    ($regularDayOvertimeRate / 100)
+                                    * (1 + ($nightShiftDifferentialRate / 100))
+                                    * 100,
                                     1
                                 ) }}%)
                             </span>
                         </th>
+
+                        {{-- REST DAY OT + NSD --}}
 
                         <th class="text-right">
                             Rest Day
                             <span class="table-rate-title">
                                 ({{ number_format(
-                                    $restDayOvertimeRate
-                                    + $nightShiftDifferentialRate,
+                                    ($restDayOvertimeRate / 100)
+                                    * (1 + ($nightShiftDifferentialRate / 100))
+                                    * 100,
                                     1
                                 ) }}%)
                             </span>
                         </th>
 
+                        {{-- SPECIAL NON-WORKING HOLIDAY --}}
+
                         <th class="text-right">
                             Special NW Holiday
                         </th>
 
+                        {{-- REGULAR HOLIDAY --}}
+
                         <th class="text-right">
                             Regular Holiday
                         </th>
+
+                        {{-- TOTAL --}}
 
                         <th class="text-right">
                             Total
@@ -699,9 +737,12 @@
                     </tr>
                 </thead>
 
+
                 <tbody>
 
-                    {{-- HOURS --}}
+                    {{-- =================================================
+                        HOURS
+                        ================================================= --}}
 
                     <tr>
 
@@ -746,7 +787,9 @@
                     </tr>
 
 
-                    {{-- RATE --}}
+                    {{-- =================================================
+                        RATE
+                        ================================================= --}}
 
                     <tr>
 
@@ -785,7 +828,9 @@
                     </tr>
 
 
-                    {{-- AMOUNT --}}
+                    {{-- =================================================
+                        AMOUNT
+                        ================================================= --}}
 
                     <tr class="ot-nsd-amount-row">
 
@@ -834,7 +879,9 @@
                     </tr>
 
 
-                    {{-- INFORMATION --}}
+                    {{-- =================================================
+                        INFORMATION
+                        ================================================= --}}
 
                     <tr>
 

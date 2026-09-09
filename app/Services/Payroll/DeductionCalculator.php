@@ -18,12 +18,13 @@ class DeductionCalculator
         float $grossPay,
         float $basicPay,
         PayrollPeriod $period,
-        float $taxableGrossPay
+        float $taxableGrossPay,
+        float $tardinessDeduction = 0.00
     ): array {
 
         /*
          * -------------------------------------------------
-         * STATUTORY DEDUCTIONS
+         * INITIALIZE DEDUCTIONS
          * -------------------------------------------------
          */
 
@@ -31,7 +32,6 @@ class DeductionCalculator
         $philhealth = 0.00;
         $pagibig = 0.00;
         $withholdingTax = 0.00;
-
         $otherDeductions = 0.00;
 
         $sortOrder = 100;
@@ -41,6 +41,9 @@ class DeductionCalculator
          * -------------------------------------------------
          * STATUTORY CONTRIBUTIONS
          * -------------------------------------------------
+         *
+         * SSS, PhilHealth, and Pag-IBIG are deducted according
+         * to the same payroll-period statutory contribution schedule.
          */
 
         $shouldDeductStatutory =
@@ -78,15 +81,11 @@ class DeductionCalculator
                 $payroll->items()->create([
                     'item_type' => 'deduction',
                     'code' => 'SSS',
-                    'description' =>
-                        'SSS Contribution',
+                    'description' => 'SSS Contribution',
                     'quantity' => 1,
-                    'rate' =>
-                        round($sss, 2),
-                    'amount' =>
-                        round($sss, 2),
-                    'sort_order' =>
-                        $sortOrder,
+                    'rate' => round($sss, 2),
+                    'amount' => round($sss, 2),
+                    'sort_order' => $sortOrder,
                 ]);
 
                 $sortOrder++;
@@ -119,38 +118,161 @@ class DeductionCalculator
                 $payroll->items()->create([
                     'item_type' => 'deduction',
                     'code' => 'PHILHEALTH',
-                    'description' =>
-                        'PhilHealth Contribution',
+                    'description' => 'PhilHealth Contribution',
                     'quantity' => 1,
-                    'rate' =>
-                        round(
-                            $philhealth,
-                            2
-                        ),
-                    'amount' =>
-                        round(
-                            $philhealth,
-                            2
-                        ),
-                    'sort_order' =>
-                        $sortOrder,
+                    'rate' => round($philhealth, 2),
+                    'amount' => round($philhealth, 2),
+                    'sort_order' => $sortOrder,
                 ]);
 
                 $sortOrder++;
             }
-        }
-
-
         /*
          * -------------------------------------------------
          * PAG-IBIG
          * -------------------------------------------------
          *
-         * Your current calculator does not yet calculate
-         * Pag-IBIG, so this remains 0.00.
+         * Current system rule:
          *
-         * We are intentionally not changing that here.
+         * ₱200.00 per payroll period.
+         *
+         * Pag-IBIG follows the same statutory deduction timing
+         * as SSS and PhilHealth.
+         *
+         * If you later want Pag-IBIG to be calculated from
+         * salary brackets instead, this can be changed here.
          */
+
+        $pagibig = 200.00;
+
+
+        $payroll->items()->create([
+            'item_type' => 'deduction',
+            'code' => 'PAGIBIG',
+            'description' => 'Pag-IBIG Fund Contribution',
+            'quantity' => 1,
+            'rate' => 200.00,
+            'amount' => 200.00,
+            'sort_order' => $sortOrder,
+        ]);
+
+        $sortOrder++;
+
+
+        }
+
+
+        /*
+         * -------------------------------------------------
+         * TARDINESS
+         * -------------------------------------------------
+         *
+         * Tardiness is deducted BEFORE withholding tax.
+         *
+         * It is an attendance-based deduction calculated
+         * by PayrollCalculator:
+         *
+         * Late Minutes ÷ 60 × Hourly Rate
+         */
+
+        if ($tardinessDeduction > 0) {
+
+            $payroll->items()->create([
+                'item_type' => 'deduction',
+                'code' => 'TARDINESS',
+                'description' => 'Tardiness',
+                'quantity' => 1,
+                'rate' => round(
+                    $tardinessDeduction,
+                    2
+                ),
+                'amount' => round(
+                    $tardinessDeduction,
+                    2
+                ),
+                'sort_order' => 90,
+            ]);
+        }
+
+
+        /*
+         * -------------------------------------------------
+         * OTHER EMPLOYEE DEDUCTIONS
+         * -------------------------------------------------
+         *
+         * Current payroll rule:
+         *
+         * Employee/company deductions are deducted AFTER
+         * withholding tax is calculated.
+         *
+         * Examples include company loans, cash advances,
+         * salary loans, and other employee deductions.
+         * They reduce Net Pay, but do NOT reduce taxable
+         * compensation used for withholding tax.
+         */
+
+        foreach (
+            $employee->deductions as $employeeDeduction
+        ) {
+
+            if (
+                ! $this->isApplicable(
+                    $employeeDeduction,
+                    $period
+                )
+            ) {
+                continue;
+            }
+
+
+            $amount =
+                $this->calculateDeductionAmount(
+                    $employeeDeduction
+                );
+
+
+            if ($amount <= 0) {
+                continue;
+            }
+
+
+            $amount = round(
+                $amount,
+                2
+            );
+
+
+            $otherDeductions += $amount;
+
+
+            $payroll->items()->create([
+                'item_type' => 'deduction',
+
+                'code' =>
+                    $employeeDeduction
+                        ->deduction?->code
+                    ?? 'DEDUCTION',
+
+                'description' =>
+                    $employeeDeduction
+                        ->deduction?->name
+                    ?? 'Deduction',
+
+                'reference_id' =>
+                    $employeeDeduction
+                        ->deduction_id,
+
+                'quantity' => 1,
+
+                'rate' => $amount,
+
+                'amount' => $amount,
+
+                'sort_order' => $sortOrder,
+            ]);
+
+            $sortOrder++;
+        }
 
 
         /*
@@ -158,21 +280,28 @@ class DeductionCalculator
          * BIR TAXABLE COMPENSATION
          * -------------------------------------------------
          *
-         * taxableGrossPay already contains:
+         * taxableGrossPay contains ONLY:
          *
          *   Basic Pay
          *   + taxable allowances
-         *   + holiday/rest-day premium
+         *   + premium pay
          *   + overtime
          *   + NSD
          *   + other taxable earnings
          *
-         * It excludes:
+         * Non-taxable allowances are excluded by
+         * PayrollCalculator before this value is passed.
          *
-         *   non-taxable allowances
+         * The deductions below are applied BEFORE
+         * withholding tax:
          *
-         * Then mandatory employee contributions are
-         * deducted before applying the BIR table.
+         *   SSS
+         *   PhilHealth
+         *   Pag-IBIG
+         *   Tardiness
+         *
+         * Other employee/company deductions are NOT included
+         * here. They are deducted only after withholding tax.
          */
 
         $netTaxableCompensation =
@@ -182,6 +311,7 @@ class DeductionCalculator
                 - $sss
                 - $philhealth
                 - $pagibig
+                - $tardinessDeduction
             );
 
 
@@ -208,23 +338,18 @@ class DeductionCalculator
 
             $payroll->items()->create([
                 'item_type' => 'deduction',
-                'code' =>
-                    'WITHHOLDING_TAX',
-                'description' =>
-                    'Withholding Tax',
+                'code' => 'WITHHOLDING_TAX',
+                'description' => 'Withholding Tax',
                 'quantity' => 1,
-                'rate' =>
-                    round(
-                        $withholdingTax,
-                        2
-                    ),
-                'amount' =>
-                    round(
-                        $withholdingTax,
-                        2
-                    ),
-                'sort_order' =>
-                    $sortOrder,
+                'rate' => round(
+                    $withholdingTax,
+                    2
+                ),
+                'amount' => round(
+                    $withholdingTax,
+                    2
+                ),
+                'sort_order' => $sortOrder,
             ]);
 
             $sortOrder++;
@@ -233,83 +358,21 @@ class DeductionCalculator
 
         /*
          * -------------------------------------------------
-         * OTHER EMPLOYEE DEDUCTIONS
+         * TOTAL OTHER DEDUCTIONS
          * -------------------------------------------------
          *
-         * These remain deductions from NET PAY.
+         * other_deductions includes:
          *
-         * They are NOT subtracted from BIR taxable
-         * compensation.
+         *   Employee deductions
+         *   + Tardiness
+         *
+         * Tardiness is also returned separately so the
+         * payroll dashboard can display it independently.
          */
 
-        foreach (
-            $employee->deductions
-            as $employeeDeduction
-        ) {
-
-            if (
-                ! $this->isApplicable(
-                    $employeeDeduction,
-                    $period
-                )
-            ) {
-                continue;
-            }
-
-
-            $amount =
-                $this->calculateDeductionAmount(
-                    $employeeDeduction
-                );
-
-
-            if ($amount <= 0) {
-                continue;
-            }
-
-
-            $amount =
-                round(
-                    $amount,
-                    2
-                );
-
-
-            $otherDeductions +=
-                $amount;
-
-
-            $payroll->items()->create([
-                'item_type' =>
-                    'deduction',
-
-                'code' =>
-                    $employeeDeduction
-                        ->deduction?->code
-                    ?? 'DEDUCTION',
-
-                'description' =>
-                    $employeeDeduction
-                        ->deduction?->name
-                    ?? 'Deduction',
-
-                'reference_id' =>
-                    $employeeDeduction
-                        ->deduction_id,
-
-                'quantity' => 1,
-
-                'rate' => $amount,
-
-                'amount' => $amount,
-
-                'sort_order' =>
-                    $sortOrder,
-            ]);
-
-            $sortOrder++;
-        }
-
+        $otherDeductionsWithTardiness =
+            $otherDeductions
+            + $tardinessDeduction;
 
         /*
          * -------------------------------------------------
@@ -322,8 +385,14 @@ class DeductionCalculator
             + $philhealth
             + $pagibig
             + $withholdingTax
-            + $otherDeductions;
+            + $otherDeductionsWithTardiness;
 
+
+        /*
+         * -------------------------------------------------
+         * RETURN
+         * -------------------------------------------------
+         */
 
         return [
             'sss' =>
@@ -352,7 +421,13 @@ class DeductionCalculator
 
             'other_deductions' =>
                 round(
-                    $otherDeductions,
+                    $otherDeductionsWithTardiness,
+                    2
+                ),
+
+            'tardiness' =>
+                round(
+                    $tardinessDeduction,
                     2
                 ),
 
@@ -361,14 +436,37 @@ class DeductionCalculator
                     $totalDeductions,
                     2
                 ),
+
+            /*
+             * Useful for debugging / payroll reports.
+             */
+
+            'taxable_gross_pay' =>
+                round(
+                    $taxableGrossPay,
+                    2
+                ),
+
+            'net_taxable_compensation' =>
+                round(
+                    $netTaxableCompensation,
+                    2
+                ),
         ];
     }
 
 
     /*
-     * -------------------------------------------------
+     * =================================================
      * BIR WITHHOLDING TAX
-     * -------------------------------------------------
+     * =================================================
+     *
+     * Current BIR withholding-tax tables:
+     *
+     * Effective January 1, 2023 onwards.
+     *
+     * The applicable table is selected according to
+     * employee payroll frequency.
      */
 
     private function calculateWithholdingTax(
@@ -383,123 +481,88 @@ class DeductionCalculator
             );
 
 
-        $frequency = strtolower(
-            str_replace(
-                ['-', ' '],
-                '_',
-                (string)
-                    $employee->pay_frequency
-            )
-        );
-
-
-        /*
-         * SEMI-MONTHLY
-         */
-
-        if (
-            $frequency === 'semi_monthly'
-        ) {
-
-            return $this
-                ->calculateSemiMonthlyTax(
-                    $taxableCompensation
-                );
-        }
-
-
-        /*
-         * MONTHLY
-         */
-
-        if (
-            $frequency === 'monthly'
-        ) {
-
-            return $this
-                ->calculateMonthlyTax(
-                    $taxableCompensation
-                );
-        }
-
-
-        /*
-         * WEEKLY
-         */
-
-        if (
-            $frequency === 'weekly'
-        ) {
-
-            return $this
-                ->calculateWeeklyTax(
-                    $taxableCompensation
-                );
-        }
-
-
-        /*
-         * DAILY
-         */
-
-        if (
-            $frequency === 'daily'
-        ) {
-
-            return $this
-                ->calculateDailyTax(
-                    $taxableCompensation
-                );
-        }
-
-
-        /*
-         * BI-WEEKLY
-         *
-         * BIR does not provide a dedicated bi-weekly
-         * table. Use the semi-monthly equivalent.
-         */
-
-        if (
-            $frequency === 'bi_weekly'
-        ) {
-
-            $semiMonthlyEquivalent =
-                $taxableCompensation
-                * 26
-                / 24;
-
-
-            $tax =
-                $this
-                    ->calculateSemiMonthlyTax(
-                        $semiMonthlyEquivalent
-                    );
-
-
-            return round(
-                $tax * 24 / 26,
-                2
+        $frequency =
+            strtolower(
+                str_replace(
+                    ['-', ' '],
+                    '_',
+                    (string) $employee->pay_frequency
+                )
             );
-        }
 
 
-        /*
-         * DEFAULT
-         */
+        return match ($frequency) {
 
-        return $this
-            ->calculateSemiMonthlyTax(
-                $taxableCompensation
-            );
+            'daily' =>
+                $this->calculateDailyTax(
+                    $taxableCompensation
+                ),
+
+            'weekly' =>
+                $this->calculateWeeklyTax(
+                    $taxableCompensation
+                ),
+
+            'semi_monthly' =>
+                $this->calculateSemiMonthlyTax(
+                    $taxableCompensation
+                ),
+
+            'monthly' =>
+                $this->calculateMonthlyTax(
+                    $taxableCompensation
+                ),
+
+            /*
+             * BIR does not have a dedicated bi-weekly
+             * withholding table.
+             *
+             * Convert the bi-weekly amount to the
+             * semi-monthly equivalent and convert the
+             * resulting tax back to the bi-weekly period.
+             */
+
+            'bi_weekly' =>
+                $this->calculateBiWeeklyTax(
+                    $taxableCompensation
+                ),
+
+            default =>
+                $this->calculateSemiMonthlyTax(
+                    $taxableCompensation
+                ),
+        };
     }
 
 
     /*
-     * -------------------------------------------------
-     * BIR ANNEX E
+     * =================================================
      * SEMI-MONTHLY
-     * -------------------------------------------------
+     * =================================================
+     *
+     * BIR Annex E:
+     *
+     * ₱10,417 and below
+     *               = ₱0
+     *
+     * Over ₱10,417 to ₱16,666
+     *               = 15% of excess over ₱10,417
+     *
+     * Over ₱16,667 to ₱33,332
+     *               = ₱937.50
+     *                 + 20% of excess over ₱16,667
+     *
+     * Over ₱33,333 to ₱83,332
+     *               = ₱4,270.70
+     *                 + 25% of excess over ₱33,333
+     *
+     * Over ₱83,333 to ₱333,332
+     *               = ₱16,770.70
+     *                 + 30% of excess over ₱83,333
+     *
+     * ₱333,333 and above
+     *               = ₱91,770.70
+     *                 + 35% of excess over ₱333,333
      */
 
     private function calculateSemiMonthlyTax(
@@ -572,10 +635,33 @@ class DeductionCalculator
 
 
     /*
-     * -------------------------------------------------
-     * BIR ANNEX E
+     * =================================================
      * MONTHLY
-     * -------------------------------------------------
+     * =================================================
+     *
+     * BIR Annex E:
+     *
+     * ₱20,833 and below
+     *               = ₱0
+     *
+     * Over ₱20,833 to ₱33,332
+     *               = 15% of excess over ₱20,833
+     *
+     * Over ₱33,333 to ₱66,666
+     *               = ₱1,875
+     *                 + 20% of excess over ₱33,333
+     *
+     * Over ₱66,667 to ₱166,666
+     *               = ₱8,541.80
+     *                 + 25% of excess over ₱66,667
+     *
+     * Over ₱166,667 to ₱666,666
+     *               = ₱33,541.80
+     *                 + 30% of excess over ₱166,667
+     *
+     * ₱666,667 and above
+     *               = ₱183,541.80
+     *                 + 35% of excess over ₱666,667
      */
 
     private function calculateMonthlyTax(
@@ -648,10 +734,9 @@ class DeductionCalculator
 
 
     /*
-     * -------------------------------------------------
-     * BIR ANNEX E
+     * =================================================
      * WEEKLY
-     * -------------------------------------------------
+     * =================================================
      */
 
     private function calculateWeeklyTax(
@@ -724,10 +809,9 @@ class DeductionCalculator
 
 
     /*
-     * -------------------------------------------------
-     * BIR ANNEX E
+     * =================================================
      * DAILY
-     * -------------------------------------------------
+     * =================================================
      */
 
     private function calculateDailyTax(
@@ -800,9 +884,48 @@ class DeductionCalculator
 
 
     /*
-     * -------------------------------------------------
+     * =================================================
+     * BI-WEEKLY
+     * =================================================
+     *
+     * No dedicated BIR bi-weekly table is used here.
+     *
+     * Convert:
+     *
+     * bi-weekly → semi-monthly equivalent
+     *
+     * 26 bi-weekly periods / 24 semi-monthly periods
+     */
+
+    private function calculateBiWeeklyTax(
+        float $taxable
+    ): float {
+
+        $semiMonthlyEquivalent =
+            $taxable
+            * 26
+            / 24;
+
+
+        $semiMonthlyTax =
+            $this->calculateSemiMonthlyTax(
+                $semiMonthlyEquivalent
+            );
+
+
+        return round(
+            $semiMonthlyTax
+            * 24
+            / 26,
+            2
+        );
+    }
+
+
+    /*
+     * =================================================
      * STATUTORY CONTRIBUTION SCHEDULE
-     * -------------------------------------------------
+     * =================================================
      */
 
     private function shouldDeductStatutoryContributions(
@@ -810,19 +933,33 @@ class DeductionCalculator
         PayrollPeriod $period
     ): bool {
 
-        $frequency = strtolower(
-            str_replace(
-                ['-', ' '],
-                '_',
-                $employee->pay_frequency
-            )
-        );
+        $frequency =
+            strtolower(
+                str_replace(
+                    ['-', ' '],
+                    '_',
+                    $employee->pay_frequency
+                )
+            );
 
+
+        /*
+         * Non-semi-monthly employees:
+         *
+         * Deduct every payroll period.
+         */
 
         if ($frequency !== 'semi_monthly') {
             return true;
         }
 
+
+        /*
+         * Semi-monthly:
+         *
+         * SSS and PhilHealth are deducted during the
+         * first payroll period of the month.
+         */
 
         $periodEndDay =
             Carbon::parse(
@@ -835,9 +972,13 @@ class DeductionCalculator
 
 
     /*
-     * -------------------------------------------------
+     * =================================================
      * SSS GROSS BASIS
-     * -------------------------------------------------
+     * =================================================
+     *
+     * For semi-monthly employees, combine the first
+     * and second payroll periods to determine the
+     * monthly SSS salary basis.
      */
 
     private function resolveSssGrossBasis(
@@ -846,13 +987,14 @@ class DeductionCalculator
         float $currentGrossPay
     ): float {
 
-        $frequency = strtolower(
-            str_replace(
-                ['-', ' '],
-                '_',
-                $employee->pay_frequency
-            )
-        );
+        $frequency =
+            strtolower(
+                str_replace(
+                    ['-', ' '],
+                    '_',
+                    $employee->pay_frequency
+                )
+            );
 
 
         if ($frequency !== 'semi_monthly') {
@@ -917,9 +1059,9 @@ class DeductionCalculator
 
 
     /*
-     * -------------------------------------------------
+     * =================================================
      * MONTHLY BASIC PAY
-     * -------------------------------------------------
+     * =================================================
      */
 
     private function resolveMonthlyBasicPay(
@@ -928,13 +1070,14 @@ class DeductionCalculator
         float $currentBasicPay
     ): float {
 
-        $frequency = strtolower(
-            str_replace(
-                ['-', ' '],
-                '_',
-                $employee->pay_frequency
-            )
-        );
+        $frequency =
+            strtolower(
+                str_replace(
+                    ['-', ' '],
+                    '_',
+                    $employee->pay_frequency
+                )
+            );
 
 
         if ($frequency !== 'semi_monthly') {
@@ -1007,9 +1150,9 @@ class DeductionCalculator
 
 
     /*
-     * -------------------------------------------------
+     * =================================================
      * SSS
-     * -------------------------------------------------
+     * =================================================
      */
 
     private function calculateSss(
@@ -1035,9 +1178,9 @@ class DeductionCalculator
 
 
     /*
-     * -------------------------------------------------
+     * =================================================
      * PHILHEALTH
-     * -------------------------------------------------
+     * =================================================
      */
 
     private function calculatePhilhealth(
@@ -1056,13 +1199,14 @@ class DeductionCalculator
         }
 
 
-        $basis = max(
-            (float) $rate->salary_floor,
-            min(
-                $monthlyBasicPay,
-                (float) $rate->salary_ceiling
-            )
-        );
+        $basis =
+            max(
+                (float) $rate->salary_floor,
+                min(
+                    $monthlyBasicPay,
+                    (float) $rate->salary_ceiling
+                )
+            );
 
 
         return round(
@@ -1078,9 +1222,9 @@ class DeductionCalculator
 
 
     /*
-     * -------------------------------------------------
+     * =================================================
      * OTHER EMPLOYEE DEDUCTIONS
-     * -------------------------------------------------
+     * =================================================
      */
 
     private function isApplicable(
@@ -1129,6 +1273,12 @@ class DeductionCalculator
         }
 
 
+        /*
+         * One-time deduction:
+         *
+         * Do not deduct again if already processed.
+         */
+
         if (
             $deduction->schedule_type ===
                 'one_time'
@@ -1141,6 +1291,12 @@ class DeductionCalculator
         }
 
 
+        /*
+         * Installment:
+         *
+         * Stop when the remaining balance reaches zero.
+         */
+
         if (
             $deduction->schedule_type ===
                 'installment'
@@ -1150,6 +1306,13 @@ class DeductionCalculator
             return false;
         }
 
+
+        /*
+         * Installment:
+         *
+         * Stop after the configured number of
+         * installments.
+         */
 
         if (
             $deduction->schedule_type ===
@@ -1175,6 +1338,10 @@ class DeductionCalculator
             ?? 'recurring';
 
 
+        /*
+         * ONE-TIME
+         */
+
         if ($scheduleType === 'one_time') {
 
             return max(
@@ -1183,6 +1350,10 @@ class DeductionCalculator
             );
         }
 
+
+        /*
+         * INSTALLMENT
+         */
 
         if ($scheduleType === 'installment') {
 
@@ -1216,12 +1387,22 @@ class DeductionCalculator
         }
 
 
+        /*
+         * RECURRING
+         */
+
         return max(
             0,
             (float) $deduction->amount
         );
     }
 
+
+    /*
+     * =================================================
+     * CHECK PREVIOUS ONE-TIME DEDUCTION
+     * =================================================
+     */
 
     private function hasAlreadyBeenDeducted(
         EmployeeDeduction $employeeDeduction,

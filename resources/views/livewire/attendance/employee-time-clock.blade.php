@@ -123,10 +123,16 @@
                         @foreach ($employees as $employee)
 
                             <option value="{{ $employee->id }}">
+                                <strong>
+                                    <div class="text-sm font-semibold text-gray-900">
+                                        {{ $employee->full_name }}
+                                    </div>
 
-                                {{ $employee->full_name }}
-                                —
-                                {{ $employee->employee_id }}
+                                    <div class="text-xs text-gray-500">
+                                        {{ $employee->employee_id }}
+                                    </div>
+                                </strong>
+                                
 
                             </option>
 
