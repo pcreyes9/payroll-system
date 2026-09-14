@@ -244,11 +244,13 @@ class AttendanceRecords extends Page implements HasForms
         $period = $this->data['period']
             ?? '1-15';
 
-        $startDate = $month . '-01';
-
         if ($period === '1-15') {
+            $startDate = $month . '-01';
+
             $endDate = $month . '-15';
         } else {
+            $startDate = $month . '-16';
+
             $endDate = Carbon::createFromFormat(
                 'Y-m',
                 $month
